@@ -1,0 +1,5 @@
+# Worktrees isolados criados durante o desenvolvimento
+.claude/worktrees/
+
+# Espaco de trabalho do subagent-driven-development (ledger, briefs, relatorios)
+.superpowers/
