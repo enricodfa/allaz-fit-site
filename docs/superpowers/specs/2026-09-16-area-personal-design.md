@@ -301,9 +301,9 @@ Nada é reportado como pronto sem a saída correspondente.
 
 ## 10. Riscos conhecidos
 
-- **Limite de projetos do Supabase.** A conta já tem dois projetos (DRAKMA e
-  PHENET), ambos pausados. Criar um terceiro projeto ativo pode esbarrar no
-  limite do plano gratuito e exigir decisão do dono da conta.
+- ~~**Limite de projetos do Supabase.**~~ **Resolvido em 2026-09-16:** o dono da
+  conta removeu o projeto DRAKMA e criou o projeto `ALLAZ`
+  (ref `denntoorhjfzwywnzqsp`, região `us-west-2`), que está ativo.
 - **Senha em poder do personal.** Mitigado pela troca de senha no perfil do
   aluno, não eliminado. Recuperação por e-mail resolve de vez, e fica para
   depois.
