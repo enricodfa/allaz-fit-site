@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0B0908">
+<title>Editar treino — Allaz Fit</title>
+<link rel="icon" href="../assets/logo.jpg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body class="app">
+
+<div id="topo"></div>
+
+<main class="app-conteudo app-conteudo--wide">
+  <div class="plano-cartao" style="margin-bottom:1.6rem">
+    <label class="campo" style="margin-bottom:.8rem">
+      <span class="campo__rotulo">Nome do plano</span>
+      <input id="p-nome" placeholder="Hipertrofia — Setembro">
+    </label>
+    <label class="campo" style="margin-bottom:0">
+      <span class="campo__rotulo">Objetivo</span>
+      <input id="p-objetivo" placeholder="Ganho de massa em membros superiores">
+    </label>
+  </div>
+
+  <div id="divisoes"></div>
+
+  <button class="b b--fantasma b--bloco" id="add-divisao" style="margin-top:.4rem">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+    Adicionar treino (A, B, C…)
+  </button>
+
+  <div class="barra-salvar">
+    <button class="b b--primario" id="salvar">Salvar treino</button>
+    <span class="barra-salvar__estado" id="estado">Salvo</span>
+  </div>
+</main>
+
+<script type="module">
+import {dados, esc, plano, aluno, montarTopo, icone, salvar as persistir} from './js/demo.js';
+
+const params = new URLSearchParams(location.search);
+const planoId = params.get('id');
+const alunoIdNovo = params.get('aluno');
+
+const d = dados();
+let p = planoId ? plano(planoId) : null;
+let novo = false;
+
+if(!p){
+  // Plano novo: nasce com um treino e um exercício em branco, para o
+  // personal já ter onde digitar em vez de encarar uma tela vazia.
+  novo = true;
+  p = {
+    id: 'p' + (Date.now() % 100000),
+    alunoId: alunoIdNovo ?? 'a1',
+    nome: '', objetivo: '', ativo: false,
+    inicio: new Date().toISOString().slice(0,10),
+    divisoes: [{id:'d'+Date.now(), nome:'Treino A', foco:'', exercicios:[exVazio()]}],
+  };
+}
+
+const a = aluno(p.alunoId);
+
+document.getElementById('topo').innerHTML = montarTopo({
+  titulo: novo ? 'Novo treino' : 'Editar treino',
+  sub: a ? a.nome : '',
+  voltar: `aluno.html?id=${esc(p.alunoId)}`,
+});
+
+function exVazio(){
+  return {id:'e'+Math.random().toString(36).slice(2,8), nome:'', series:3, reps:'10',
+          carga:'', descanso:'60s', obs:'', video:''};
+}
+
+let sujo = false;
+function marcarSujo(){
+  sujo = true;
+  const el = document.getElementById('estado');
+  el.textContent = 'Alterações não salvas';
+  el.classList.add('barra-salvar__estado--sujo');
+}
+
+document.getElementById('p-nome').value = p.nome;
+document.getElementById('p-objetivo').value = p.objetivo;
+document.getElementById('p-nome').addEventListener('input', e => { p.nome = e.target.value; marcarSujo(); });
+document.getElementById('p-objetivo').addEventListener('input', e => { p.objetivo = e.target.value; marcarSujo(); });
+
+const elDivisoes = document.getElementById('divisoes');
+
+function desenhar(){
+  elDivisoes.innerHTML = p.divisoes.map((div, di) => `
+    <div class="divisao-editor" data-div="${di}">
+      <div class="divisao-editor__cabeca">
+        <input class="divisao-editor__nome" value="${esc(div.nome)}"
+               data-campo="nome" aria-label="Nome do treino">
+        <input class="divisao-editor__foco" value="${esc(div.foco)}"
+               data-campo="foco" placeholder="Peito e tríceps" aria-label="Foco do treino">
+        <button class="b--icone" data-mover-div="${di}" data-dir="-1" title="Subir" ${di === 0 ? 'disabled' : ''}>${icone.cima}</button>
+        <button class="b--icone" data-mover-div="${di}" data-dir="1" title="Descer" ${di === p.divisoes.length-1 ? 'disabled' : ''}>${icone.baixo}</button>
+        <button class="b--icone b--perigo" data-remover-div="${di}" title="Remover treino">${icone.lixo}</button>
+      </div>
+      <div class="divisao-editor__corpo">
+        ${div.exercicios.map((ex, ei) => `
+          <div class="ex-editor">
+            <div class="ex-editor__topo">
+              <span class="ex-editor__ordem">${ei+1}</span>
+              <span class="ex-editor__nome">
+                <input value="${esc(ex.nome)}" data-ex="${di}.${ei}" data-campo="nome"
+                       placeholder="Nome do exercício" aria-label="Nome do exercício">
+              </span>
+              <button class="b--icone" data-mover-ex="${di}.${ei}" data-dir="-1" title="Subir" ${ei === 0 ? 'disabled' : ''}>${icone.cima}</button>
+              <button class="b--icone" data-mover-ex="${di}.${ei}" data-dir="1" title="Descer" ${ei === div.exercicios.length-1 ? 'disabled' : ''}>${icone.baixo}</button>
+              <button class="b--icone b--perigo" data-remover-ex="${di}.${ei}" title="Remover exercício">${icone.lixo}</button>
+            </div>
+
+            <div class="ex-editor__grade">
+              <label><span>Séries</span>
+                <input value="${esc(ex.series ?? '')}" data-ex="${di}.${ei}" data-campo="series" inputmode="numeric"></label>
+              <label><span>Repetições</span>
+                <input value="${esc(ex.reps ?? '')}" data-ex="${di}.${ei}" data-campo="reps" placeholder="8-12"></label>
+              <label><span>Carga</span>
+                <input value="${esc(ex.carga ?? '')}" data-ex="${di}.${ei}" data-campo="carga" placeholder="40 kg"></label>
+              <label><span>Descanso</span>
+                <input value="${esc(ex.descanso ?? '')}" data-ex="${di}.${ei}" data-campo="descanso" placeholder="60s"></label>
+            </div>
+
+            <label class="campo" style="margin-bottom:.6rem">
+              <span class="campo__rotulo">Observação para o aluno</span>
+              <input value="${esc(ex.obs ?? '')}" data-ex="${di}.${ei}" data-campo="obs"
+                     placeholder="Desça controlando em 3 segundos.">
+            </label>
+
+            <label class="campo" style="margin-bottom:0">
+              <span class="campo__rotulo">Vídeo de execução</span>
+              <input value="${esc(ex.video ?? '')}" data-ex="${di}.${ei}" data-campo="video"
+                     placeholder="https://youtube.com/watch?v=...">
+              <span class="campo__dica">
+                Cole o link do YouTube. Publique como “não listado”: o vídeo não
+                aparece em buscas, mas funciona pelo link.
+              </span>
+            </label>
+          </div>`).join('')}
+
+        <button class="b b--sutil" data-add-ex="${di}">${icone.mais} Adicionar exercício</button>
+      </div>
+    </div>`).join('');
+
+  ligarEventos();
+}
+
+function ligarEventos(){
+  elDivisoes.querySelectorAll('.divisao-editor__cabeca input').forEach(inp => {
+    inp.addEventListener('input', e => {
+      const di = +e.target.closest('[data-div]').dataset.div;
+      p.divisoes[di][e.target.dataset.campo] = e.target.value;
+      marcarSujo();
+    });
+  });
+
+  elDivisoes.querySelectorAll('[data-ex]').forEach(inp => {
+    inp.addEventListener('input', e => {
+      const [di, ei] = e.target.dataset.ex.split('.').map(Number);
+      p.divisoes[di].exercicios[ei][e.target.dataset.campo] = e.target.value;
+      marcarSujo();
+    });
+  });
+
+  elDivisoes.querySelectorAll('[data-add-ex]').forEach(b => {
+    b.addEventListener('click', () => {
+      p.divisoes[+b.dataset.addEx].exercicios.push(exVazio());
+      marcarSujo(); desenhar();
+    });
+  });
+
+  elDivisoes.querySelectorAll('[data-remover-ex]').forEach(b => {
+    b.addEventListener('click', () => {
+      const [di, ei] = b.dataset.removerEx.split('.').map(Number);
+      p.divisoes[di].exercicios.splice(ei, 1);
+      marcarSujo(); desenhar();
+    });
+  });
+
+  elDivisoes.querySelectorAll('[data-mover-ex]').forEach(b => {
+    b.addEventListener('click', () => {
+      const [di, ei] = b.dataset.moverEx.split('.').map(Number);
+      const dir = +b.dataset.dir;
+      const arr = p.divisoes[di].exercicios;
+      [arr[ei], arr[ei+dir]] = [arr[ei+dir], arr[ei]];
+      marcarSujo(); desenhar();
+    });
+  });
+
+  elDivisoes.querySelectorAll('[data-remover-div]').forEach(b => {
+    b.addEventListener('click', () => {
+      p.divisoes.splice(+b.dataset.removerDiv, 1);
+      marcarSujo(); desenhar();
+    });
+  });
+
+  elDivisoes.querySelectorAll('[data-mover-div]').forEach(b => {
+    b.addEventListener('click', () => {
+      const di = +b.dataset.moverDiv, dir = +b.dataset.dir;
+      [p.divisoes[di], p.divisoes[di+dir]] = [p.divisoes[di+dir], p.divisoes[di]];
+      marcarSujo(); desenhar();
+    });
+  });
+}
+
+document.getElementById('add-divisao').addEventListener('click', () => {
+  const letra = String.fromCharCode(65 + p.divisoes.length); // A, B, C...
+  p.divisoes.push({id:'d'+Date.now(), nome:`Treino ${letra}`, foco:'', exercicios:[exVazio()]});
+  marcarSujo(); desenhar();
+});
+
+document.getElementById('salvar').addEventListener('click', () => {
+  if(!p.nome.trim()){
+    document.getElementById('p-nome').focus();
+    document.getElementById('estado').textContent = 'Dê um nome ao plano';
+    return;
+  }
+  if(novo){
+    d.planos.push(p);
+    novo = false;
+  }
+  persistir();
+  sujo = false;
+  const el = document.getElementById('estado');
+  el.textContent = 'Salvo';
+  el.classList.remove('barra-salvar__estado--sujo');
+});
+
+window.addEventListener('beforeunload', e => {
+  if(sujo){ e.preventDefault(); e.returnValue = ''; }
+});
+
+desenhar();
+</script>
+
+</body>
+</html>

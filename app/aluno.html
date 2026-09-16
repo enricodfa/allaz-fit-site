@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0B0908">
+<title>Aluno — Allaz Fit</title>
+<link rel="icon" href="../assets/logo.jpg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body class="app">
+
+<div id="topo"></div>
+
+<main class="app-conteudo">
+  <div class="abas" role="tablist">
+    <button role="tab" id="t-planos" aria-selected="true">Planos</button>
+    <button role="tab" id="t-historico" aria-selected="false">Histórico</button>
+  </div>
+
+  <section id="painel-planos"></section>
+  <section id="painel-historico" hidden></section>
+</main>
+
+<script type="module">
+import {dados, esc, aluno, planosDoAluno, sessoesDoAluno, divisao, letraDivisao,
+        montarTopo, icone, formatarDataLonga, formatarData, textoDiasDesde,
+        salvar, ultimoRegistro} from './js/demo.js';
+
+const id = new URLSearchParams(location.search).get('id') ?? 'a1';
+const a = aluno(id);
+
+if(!a){
+  document.body.innerHTML = '<div class="vazio" style="margin:4rem auto;max-width:400px">Aluno não encontrado.</div>';
+  throw new Error('aluno inexistente');
+}
+
+document.getElementById('topo').innerHTML = montarTopo({
+  titulo: a.nome,
+  sub: a.telefone || 'Aluno',
+  voltar: 'personal.html',
+});
+
+/* ---------- aba Planos ---------- */
+
+function desenharPlanos(){
+  const planos = planosDoAluno(a.id);
+  const el = document.getElementById('painel-planos');
+
+  const lista = planos.length === 0
+    ? `<div class="vazio">
+         <strong>Nenhum plano ainda</strong>
+         Monte o primeiro treino deste aluno.
+       </div>`
+    : planos.map(p => `
+        <div class="plano-cartao ${p.ativo ? 'plano-cartao--ativo' : ''}" style="margin-bottom:.7rem">
+          <div class="plano-cartao__topo">
+            <div style="flex:1;min-width:0">
+              <div class="plano-cartao__nome">${esc(p.nome)}</div>
+              <div class="plano-cartao__meta">
+                ${esc(p.objetivo || 'Sem objetivo definido')}
+                · ${p.divisoes.length} treino${p.divisoes.length === 1 ? '' : 's'}
+                · desde ${esc(formatarDataLonga(p.inicio))}
+              </div>
+            </div>
+            ${p.ativo ? '<span class="chip chip--ativo">Ativo</span>' : ''}
+          </div>
+          <div class="plano-cartao__rodape">
+            <a class="b b--fantasma b--sutil" href="plano.html?id=${esc(p.id)}">Editar treino</a>
+            ${p.ativo ? '' : `<button class="b b--sutil" data-ativar="${esc(p.id)}">Tornar ativo</button>`}
+          </div>
+        </div>`).join('');
+
+  el.innerHTML = `
+    <div class="barra-acao">
+      <a class="b b--primario" href="plano.html?aluno=${esc(a.id)}">
+        ${icone.mais} Novo plano
+      </a>
+    </div>
+    ${lista}`;
+
+  el.querySelectorAll('[data-ativar]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      // Ativar um plano desativa os outros: o aluno tem um treino da vez.
+      planosDoAluno(a.id).forEach(p => { p.ativo = (p.id === btn.dataset.ativar); });
+      salvar();
+      desenharPlanos();
+    });
+  });
+}
+
+/* ---------- aba Histórico ---------- */
+
+function desenharHistorico(){
+  const el = document.getElementById('painel-historico');
+  const sessoes = sessoesDoAluno(a.id);
+
+  if(sessoes.length === 0){
+    el.innerHTML = `<div class="vazio">
+      <strong>Nenhum treino registrado</strong>
+      Quando ${esc(a.nome.split(' ')[0])} concluir um treino, ele aparece aqui.
+    </div>`;
+    return;
+  }
+
+  // Agrupado por divisão: o personal quer ver frequência por treino,
+  // não uma lista corrida de datas.
+  const grupos = new Map();
+  for(const s of sessoes){
+    if(!grupos.has(s.divisaoId)) grupos.set(s.divisaoId, []);
+    grupos.get(s.divisaoId).push(s);
+  }
+
+  const totalSemana = sessoes.filter(s => {
+    const dias = (Date.now() - new Date(s.em)) / 86400000;
+    return dias <= 7;
+  }).length;
+
+  el.innerHTML = `
+    <div class="plano-cartao" style="margin-bottom:1.2rem">
+      <div class="plano-cartao__meta" style="margin:0">
+        <strong style="color:var(--bone);font-size:1.6rem;font-family:var(--f-display)">${sessoes.length}</strong>
+        treinos registrados no total · <strong style="color:var(--bone)">${totalSemana}</strong> nos últimos 7 dias
+        · último ${esc(textoDiasDesde(sessoes[0].em))}
+      </div>
+    </div>
+    ${[...grupos.entries()].map(([divId, lista]) => {
+      const div = divisao(divId);
+      const nome = div ? div.nome : 'Treino removido';
+      const foco = div ? div.foco : '';
+      return `
+        <div class="historico-grupo">
+          <button class="historico-grupo__cabeca" data-grupo="${esc(divId)}" aria-expanded="false">
+            <span class="historico-grupo__letra">${esc(letraDivisao(nome))}</span>
+            <span class="historico-grupo__info">
+              <span class="historico-grupo__titulo">${esc(nome)}${foco ? ' — ' + esc(foco) : ''}</span>
+              <span class="historico-grupo__meta">
+                ${lista.length} ${lista.length === 1 ? 'vez' : 'vezes'}
+                · última em ${esc(formatarDataLonga(lista[0].em))}
+              </span>
+            </span>
+            <span class="aluno-linha__seta">${icone.baixo}</span>
+          </button>
+          <div class="historico-grupo__corpo" id="corpo-${esc(divId)}" hidden>
+            ${detalheGrupo(div, lista)}
+          </div>
+        </div>`;
+    }).join('')}`;
+
+  el.querySelectorAll('[data-grupo]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const corpo = document.getElementById('corpo-' + btn.dataset.grupo);
+      const aberto = !corpo.hidden;
+      corpo.hidden = aberto;
+      btn.setAttribute('aria-expanded', String(!aberto));
+    });
+  });
+}
+
+function detalheGrupo(div, sessoes){
+  if(!div) return '<p style="color:var(--smoke-2);font-size:.9rem">Este treino não existe mais no plano.</p>';
+
+  return div.exercicios.map(ex => {
+    const pontos = sessoes
+      .map(s => ({em:s.em, ...(s.registros?.[ex.id] ?? {})}))
+      .filter(p => p.carga != null || p.reps != null);
+
+    if(pontos.length === 0) return '';
+
+    return `
+      <div style="margin-bottom:1.1rem">
+        <div style="font-weight:600;color:var(--bone);font-size:.92rem;margin-bottom:.35rem">${esc(ex.nome)}</div>
+        <div class="evolucao">
+          ${pontos.map((p, i) => {
+            const anterior = pontos[i+1];
+            let delta = '';
+            if(anterior && p.carga != null && anterior.carga != null){
+              const dif = p.carga - anterior.carga;
+              if(dif > 0) delta = `<span class="evolucao__delta evolucao__delta--sobe">+${dif}</span>`;
+              else if(dif < 0) delta = `<span class="evolucao__delta evolucao__delta--desce">${dif}</span>`;
+              else delta = `<span class="evolucao__delta evolucao__delta--desce">=</span>`;
+            } else {
+              delta = '<span class="evolucao__delta"></span>';
+            }
+            const valor = p.carga != null ? `${p.carga} kg` : '—';
+            const reps = p.reps != null ? ` × ${p.reps}` : '';
+            return `
+              <div class="evolucao__linha">
+                <span class="evolucao__data">${esc(formatarData(p.em))}</span>
+                <span class="evolucao__ex">${esc(valor)}${esc(reps)}</span>
+                ${delta}
+              </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+  }).join('') || '<p style="color:var(--smoke-2);font-size:.9rem">Treinos concluídos, mas sem cargas anotadas.</p>';
+}
+
+/* ---------- abas ---------- */
+
+const abas = [
+  {botao:'t-planos',    painel:'painel-planos'},
+  {botao:'t-historico', painel:'painel-historico'},
+];
+
+abas.forEach(({botao, painel}) => {
+  document.getElementById(botao).addEventListener('click', () => {
+    abas.forEach(x => {
+      const ativo = x.botao === botao;
+      document.getElementById(x.botao).setAttribute('aria-selected', String(ativo));
+      document.getElementById(x.painel).hidden = !ativo;
+    });
+  });
+});
+
+desenharPlanos();
+desenharHistorico();
+</script>
+
+</body>
+</html>

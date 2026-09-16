@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0B0908">
+<title>Meus alunos — Allaz Fit</title>
+<link rel="icon" href="../assets/logo.jpg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body class="app">
+
+<div id="topo"></div>
+
+<main class="app-conteudo">
+  <div class="tela-cabecalho">
+    <h1 class="tela-titulo">Meus alunos</h1>
+    <p class="tela-sub">Quem está treinando, quem sumiu, e o que cada um tem para fazer.</p>
+  </div>
+
+  <div class="busca">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+    <input type="search" id="busca" placeholder="Buscar aluno pelo nome" aria-label="Buscar aluno">
+  </div>
+
+  <div class="barra-acao">
+    <button class="b b--primario" id="novo-aluno">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+      Novo aluno
+    </button>
+  </div>
+
+  <div class="lista" id="lista"></div>
+  <div id="vazio"></div>
+</main>
+
+<dialog id="dlg-novo">
+  <form method="dialog">
+    <div class="modal__cabeca">
+      <h2 class="modal__titulo">Novo aluno</h2>
+    </div>
+    <div class="modal__corpo">
+      <label class="campo">
+        <span class="campo__rotulo">Nome completo</span>
+        <input id="n-nome" placeholder="Camila Souza" required>
+      </label>
+      <label class="campo">
+        <span class="campo__rotulo">E-mail</span>
+        <input id="n-email" type="email" placeholder="camila@exemplo.com" required>
+      </label>
+      <div class="campo-linha campo-linha--2" style="margin-bottom:1rem">
+        <label class="campo">
+          <span class="campo__rotulo">Telefone</span>
+          <input id="n-telefone" placeholder="(48) 99999-0000">
+        </label>
+        <label class="campo">
+          <span class="campo__rotulo">Senha inicial</span>
+          <input id="n-senha" value="allaz2026" required>
+        </label>
+      </div>
+      <p class="campo__dica">
+        O aluno entra com esse e-mail e senha, e pode trocar a senha depois no
+        perfil dele.
+      </p>
+    </div>
+    <div class="modal__rodape">
+      <button class="b b--fantasma" value="cancelar">Cancelar</button>
+      <button class="b b--primario" id="n-salvar" value="salvar">Cadastrar aluno</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module">
+import {dados, esc, iniciais, montarTopo, icone, planoAtivo,
+        sessoesDoAluno, textoDiasDesde, diasDesde, salvar} from './js/demo.js';
+
+const d = dados();
+
+document.getElementById('topo').innerHTML = montarTopo({
+  titulo: d.personal.nome,
+  sub: 'Personal trainer',
+  acoes: `<a class="b b--sutil" href="index.html" title="Sair">${icone.sair}</a>`,
+});
+
+const elLista = document.getElementById('lista');
+const elVazio = document.getElementById('vazio');
+const elBusca = document.getElementById('busca');
+
+function desenhar(){
+  const termo = elBusca.value.trim().toLowerCase();
+  const visiveis = d.alunos.filter(a => a.nome.toLowerCase().includes(termo));
+
+  if(d.alunos.length === 0){
+    elVazio.innerHTML = `<div class="vazio">
+      <strong>Nenhum aluno ainda</strong>
+      Toque em “Novo aluno” para cadastrar o primeiro.
+    </div>`;
+    elLista.innerHTML = '';
+    return;
+  }
+
+  if(visiveis.length === 0){
+    elVazio.innerHTML = `<div class="vazio">Nenhum aluno com esse nome.</div>`;
+    elLista.innerHTML = '';
+    return;
+  }
+
+  elVazio.innerHTML = '';
+  elLista.innerHTML = visiveis.map(a => {
+    const ultima = sessoesDoAluno(a.id)[0] ?? null;
+    const dias = diasDesde(ultima?.em);
+    const plano = planoAtivo(a.id);
+    // Quem sumiu é a informação que o personal procura nesta tela.
+    const sumido = dias === null || dias >= 7;
+    return `
+      <a class="aluno-linha" href="aluno.html?id=${esc(a.id)}">
+        <div class="aluno-linha__inicial">${esc(iniciais(a.nome))}</div>
+        <div class="aluno-linha__corpo">
+          <div class="aluno-linha__nome">${esc(a.nome)}</div>
+          <div class="aluno-linha__meta">
+            ${plano ? esc(plano.nome) : 'Sem treino ativo'}
+          </div>
+        </div>
+        <span class="chip ${sumido ? 'chip--alerta' : ''}">${esc(textoDiasDesde(ultima?.em))}</span>
+        <span class="aluno-linha__seta">${icone.seta}</span>
+      </a>`;
+  }).join('');
+}
+
+elBusca.addEventListener('input', desenhar);
+desenhar();
+
+/* --- cadastro --- */
+const dlg = document.getElementById('dlg-novo');
+document.getElementById('novo-aluno').addEventListener('click', () => dlg.showModal());
+
+dlg.addEventListener('close', () => {
+  if(dlg.returnValue !== 'salvar') return;
+  const nome = document.getElementById('n-nome').value.trim();
+  const telefone = document.getElementById('n-telefone').value.trim();
+  if(!nome) return;
+
+  d.alunos.push({
+    id: 'a' + (Date.now() % 100000),
+    nome, telefone,
+    desde: new Date().toISOString().slice(0,10),
+  });
+  salvar();
+  document.getElementById('n-nome').value = '';
+  document.getElementById('n-email').value = '';
+  document.getElementById('n-telefone').value = '';
+  desenhar();
+});
+</script>
+
+</body>
+</html>
