@@ -486,46 +486,89 @@ insert into public.planos (id, aluno_id, personal_id, nome) values
    '33333333-3333-3333-3333-333333333333','11111111-1111-1111-1111-111111111111','Plano do Aluno Um'),
   ('aaaaaaaa-0000-0000-0000-000000000002',
    '44444444-4444-4444-4444-444444444444','22222222-2222-2222-2222-222222222222','Plano do Aluno Dois');
+
+-- Uma divisão real no plano do Aluno Dois. Ela existe para o teste (d) do passo
+-- 5: sem um divisao_id que exista de verdade, a violação de chave estrangeira
+-- dispara antes da política e o erro resultante não prova nada sobre RLS.
+insert into public.divisoes (id, plano_id, nome, ordem) values
+  ('bbbbbbbb-0000-0000-0000-000000000002',
+   'aaaaaaaa-0000-0000-0000-000000000002','Treino A do Aluno Dois', 0);
 ```
 
 Se `crypt` não existir, habilite antes: `create extension if not exists pgcrypto;`.
+
+**Se o insert em `auth.users` falhar por coluna NOT NULL** (varia com a versão do
+Auth), acrescente estas quatro colunas com string vazia e repita —
+não improvise outras: `confirmation_token`, `recovery_token`,
+`email_change_token_new`, `email_change`.
 
 - [ ] **Passo 5: Provar o isolamento — o teste que importa**
 
 Ferramenta: `execute_sql`. Cada bloco assume a identidade de um usuário e
 consulta. **Cole a saída de cada um no relatório da tarefa.**
 
+> **Cada bloco precisa rodar dentro de `begin; … rollback;` — não remova esse
+> envelope.** `set local` só tem efeito dentro de uma transação. Fora dela ele é
+> ignorado em silêncio, a consulta roda como `postgres` (que **ignora RLS por
+> definição**), e os quatro testes passam sem testar nada. Um verde falso aqui é
+> pior do que nenhum teste, porque encerra a única verificação que garante que um
+> aluno não lê o treino de outro.
+>
+> Antes do bloco (a), rode este controle de sanidade — ele prova que o envelope
+> está funcionando:
+>
+> ```sql
+> begin;
+> set local role authenticated;
+> set local request.jwt.claims = '{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}';
+> select current_user, auth.uid();
+> rollback;
+> -- ESPERADO: current_user = 'authenticated' e auth.uid() = 33333333-...
+> -- Se vier 'postgres' ou auth.uid() nulo, PARE: os testes abaixo não valem nada.
+> ```
+
 ```sql
 -- (a) Aluno Um enxerga apenas o próprio plano.
+begin;
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}';
 select nome from public.planos;
+rollback;
 -- ESPERADO: exatamente uma linha, "Plano do Aluno Um".
 ```
 
 ```sql
 -- (b) Personal Um não enxerga o aluno do Personal Dois.
+begin;
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111","role":"authenticated"}';
 select nome from public.profiles order by nome;
+rollback;
 -- ESPERADO: "Aluno Um" e "Personal Um". NUNCA "Aluno Dois" nem "Personal Dois".
 ```
 
 ```sql
 -- (c) Aluno Um não consegue alterar o próprio plano.
+begin;
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}';
 update public.planos set nome = 'Hackeado'
  where id = 'aaaaaaaa-0000-0000-0000-000000000001';
+rollback;
 -- ESPERADO: UPDATE 0 (nenhuma linha afetada). Prescrever é só do personal.
 ```
 
 ```sql
 -- (d) Aluno Um não consegue gravar sessão em nome do Aluno Dois.
+-- O divisao_id é uma divisão REAL criada no passo 4: com um uuid inventado, a
+-- violação de chave estrangeira dispararia antes da política e o erro não
+-- provaria nada sobre RLS.
+begin;
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}';
 insert into public.sessoes (aluno_id, divisao_id)
-values ('44444444-4444-4444-4444-444444444444', gen_random_uuid());
+values ('44444444-4444-4444-4444-444444444444','bbbbbbbb-0000-0000-0000-000000000002');
+rollback;
 -- ESPERADO: erro "new row violates row-level security policy".
 ```
 
@@ -1222,10 +1265,13 @@ A tarefa mais densa da Fase 1. É onde o personal passa o tempo dele.
 - Criar: `app/plano.html`
 - Criar: `app/js/plano-editor.js`
 
+> **Ordem de execução:** a Task 10 (`video.js`) roda **antes** desta. O plano
+> original deixava a ordem em aberto; o controlador decidiu (ruling PF-1). Quando
+> você receber esta tarefa, `app/js/video.js` já existe.
+
 **Interfaces:**
 - Consome: `plano.html?aluno=<uuid>` e `plano.html?id=<uuid>` (Task 8);
-  `sb`, `exigirSessao`, `esc`, `mostrarErro`; `resolverVideo` (Task 10 — faça a
-  Task 10 antes desta ou deixe o botão de pré-visualização para o fim).
+  `sb`, `exigirSessao`, `esc`, `mostrarErro`; `resolverVideo` (Task 10, já pronta).
 - Produz: linhas em `planos`, `divisoes` e `exercicios` com os campos da Task 2.
   A tela do aluno (Task 11) lê exatamente essa estrutura.
 
@@ -1545,18 +1591,25 @@ já está configurado como site estático sem build (`framework: null`), o que
 serve `app/index.html` em `/app` sem alteração — não mexa nele sem necessidade
 comprovada.
 
-- [ ] **Passo 2: Publicar**
+> **Os passos 2, 3 e 4 não rodam durante a implementação.** O trabalho acontece
+> numa branch isolada justamente para o `master` — de onde a Vercel publica — não
+> receber código pela metade. Publicar e verificar em produção acontece **depois
+> do merge**, conduzido pelo dono do projeto. Se você é um implementador, execute
+> os passos 1, 5 e 6 e reporte os passos 2-4 como adiados por decisão do
+> controlador (ruling PF-5), não como falhos.
+
+- [ ] **Passo 2 (adiado — pós-merge): Publicar**
 
 Faça o push para `master`. A Vercel publica sozinha.
 
-- [ ] **Passo 3: Verificar em produção**
+- [ ] **Passo 3 (adiado — pós-merge): Verificar em produção**
 
 Abra `https://<dominio>/app` numa janela anônima.
 Esperado: a tela de login carrega, sem erro de CORS no console. Se houver erro de
 CORS, o domínio de produção precisa ser adicionado às Redirect URLs do Supabase
 (Authentication → URL Configuration).
 
-- [ ] **Passo 4: Rodar o roteiro completo em produção**
+- [ ] **Passo 4 (adiado — pós-merge): Rodar o roteiro completo em produção**
 
 Do começo ao fim, num aparelho celular de verdade se possível:
 
@@ -1914,20 +1967,27 @@ Esperado: os mesmos quatro resultados. Cole a saída no relatório.
 
 - [ ] **Passo 2: Testes de acesso da Fase 2**
 
+O mesmo envelope `begin; … rollback;` da Task 3 vale aqui, pelo mesmo motivo.
+
 ```sql
 -- Personal Um lê as sessões do aluno dele.
+begin;
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111","role":"authenticated"}';
 select count(*) from public.sessoes;
+rollback;
 -- ESPERADO: apenas as sessões dos alunos deste personal.
 ```
 
 ```sql
 -- Personal Um NÃO consegue inventar uma sessão em nome do aluno dele.
+-- divisao_id real, pelo mesmo motivo do teste (d) da Task 3.
+begin;
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111","role":"authenticated"}';
 insert into public.sessoes (aluno_id, divisao_id)
-values ('33333333-3333-3333-3333-333333333333', gen_random_uuid());
+values ('33333333-3333-3333-3333-333333333333','bbbbbbbb-0000-0000-0000-000000000002');
+rollback;
 -- ESPERADO: erro de violação de política. O personal lê o histórico, não o escreve.
 ```
 
@@ -1943,7 +2003,21 @@ Ferramentas: `get_advisors` para `security` e para `performance`.
 Esperado: nenhum aviso de segurança. Avisos de desempenho, se houver, são
 anotados no relatório — não necessariamente corrigidos agora.
 
-- [ ] **Passo 5: Remover os dados de teste**
+- [ ] **Passo 5: Listar os dados de teste — e PARAR**
+
+Apagar usuários é irreversível, e um `like` mal digitado alcança conta real. Por
+isso **este passo não apaga nada**. Rode apenas o levantamento:
+
+```sql
+select id, email, created_at from auth.users
+ where email like '%@teste.local' order by email;
+```
+
+Cole a lista no relatório e **encerre a tarefa aí**. O controlador apresenta a
+lista ao dono do projeto, e o `DELETE` só roda com a aprovação dele. Não execute
+`delete` em `auth.users` sob nenhuma circunstância, nem que pareça óbvio.
+
+Para referência do controlador, o comando aprovado será:
 
 ```sql
 delete from auth.users where email like '%@teste.local';
@@ -1951,14 +2025,7 @@ delete from auth.users where email like '%@teste.local';
 -- sessoes e registros junto.
 ```
 
-Confirme:
-
-```sql
-select count(*) from public.profiles where nome like '%Teste%';
--- ESPERADO: 0
-```
-
-**Não apague** a conta real do personal criada na Task 4, passo 5.
+**Nunca** inclua a conta real do personal criada na Task 4, passo 5.
 
 - [ ] **Passo 6: Atualizar o README e commitar**
 
