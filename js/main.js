@@ -6,7 +6,7 @@
 const CONFIG = {
   // Número do WhatsApp com DDI + DDD, só dígitos. Ex.: '5535998765432'
   // Enquanto estiver vazio, os botões de WhatsApp levam para o Instagram.
-  whatsapp: '',
+  whatsapp: '5535960004530',
 
   instagram: 'https://instagram.com/allazfit'
 };
