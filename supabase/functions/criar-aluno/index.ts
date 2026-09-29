@@ -9,7 +9,10 @@ const SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, content-type',
+  // O cliente supabase-js manda 'apikey' e 'x-client-info' em toda chamada
+  // de função, não só authorization/content-type — sem eles aqui, o
+  // preflight do navegador reprova a requisição antes dela sair.
+  'Access-Control-Allow-Headers': 'authorization, content-type, apikey, x-client-info',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 

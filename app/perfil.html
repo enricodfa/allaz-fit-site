@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0B0908">
+<title>Perfil — Allaz Fit</title>
+<link rel="icon" href="../assets/logo.jpg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body class="app">
+
+<div id="topo"></div>
+
+<main class="app-conteudo">
+  <div class="tela-cabecalho">
+    <h1 class="tela-titulo">Perfil</h1>
+  </div>
+
+  <div class="plano-cartao" style="margin-bottom:1.2rem">
+    <div>
+      <div class="campo__rotulo">Nome</div>
+      <div id="p-nome" style="color:var(--bone);font-weight:600"></div>
+    </div>
+    <div>
+      <div class="campo__rotulo">E-mail</div>
+      <div id="p-email" style="color:var(--smoke)"></div>
+    </div>
+  </div>
+
+  <h2 class="secao-rotulo">Trocar senha</h2>
+  <p class="aviso" id="senha-erro" hidden></p>
+  <p class="aviso aviso--ok" id="senha-ok" hidden>Senha alterada.</p>
+  <label class="campo">
+    <span class="campo__rotulo">Nova senha</span>
+    <input type="password" id="nova-senha" placeholder="••••••••">
+  </label>
+  <label class="campo">
+    <span class="campo__rotulo">Repita a nova senha</span>
+    <input type="password" id="nova-senha-2" placeholder="••••••••">
+  </label>
+  <button class="b b--primario b--bloco" id="salvar-senha">Salvar nova senha</button>
+
+  <h2 class="secao-rotulo" style="margin-top:2rem">Conta</h2>
+  <button class="b b--sutil" id="sair-perfil">Sair</button>
+</main>
+
+<script type="module">
+import { sb } from './js/supabase.js';
+import { exigirSessao, sair, trocarSenha, paginaDoPapel } from './js/auth.js';
+import { montarTopo, icone, esc, mostrarErro, limparErro } from './js/demo.js';
+
+const perfil = await exigirSessao();
+
+document.getElementById('topo').innerHTML = montarTopo({
+  titulo: 'Perfil',
+  voltar: paginaDoPapel(perfil.papel),
+});
+
+document.getElementById('p-nome').textContent = perfil.nome;
+const { data: { user } } = await sb.auth.getUser();
+document.getElementById('p-email').textContent = user?.email ?? '';
+
+document.getElementById('sair-perfil').addEventListener('click', async () => {
+  await sair();
+  window.location.replace('index.html');
+});
+
+document.getElementById('salvar-senha').addEventListener('click', async () => {
+  const elErro = document.getElementById('senha-erro');
+  const elOk = document.getElementById('senha-ok');
+  limparErro(elErro);
+  elOk.hidden = true;
+
+  const nova = document.getElementById('nova-senha').value;
+  const nova2 = document.getElementById('nova-senha-2').value;
+  if (nova !== nova2) {
+    mostrarErro(elErro, 'As senhas não coincidem.');
+    return;
+  }
+  const resultado = await trocarSenha(nova);
+  if (!resultado.ok) {
+    mostrarErro(elErro, resultado.erro);
+    return;
+  }
+  elOk.hidden = false;
+  document.getElementById('nova-senha').value = '';
+  document.getElementById('nova-senha-2').value = '';
+});
+</script>
+
+</body>
+</html>

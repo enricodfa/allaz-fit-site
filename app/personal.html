@@ -84,7 +84,8 @@ const perfil = await exigirSessao('personal');
 document.getElementById('topo').innerHTML = montarTopo({
   titulo: perfil.nome,
   sub: 'Personal trainer',
-  acoes: `<a class="b b--sutil" href="#" id="sair" title="Sair">${icone.sair}</a>`,
+  acoes: `<a class="b b--sutil" href="perfil.html" title="Perfil">${icone.pessoa}</a>
+          <a class="b b--sutil" href="#" id="sair" title="Sair">${icone.sair}</a>`,
 });
 document.getElementById('sair').addEventListener('click', async (e) => {
   e.preventDefault();
