@@ -37,29 +37,44 @@
         <input type="password" id="senha" autocomplete="current-password" placeholder="••••••••" required>
       </label>
 
-      <button class="b b--primario b--bloco" type="submit">Entrar</button>
-    </form>
+      <p class="aviso" id="erro" hidden></p>
 
-    <div class="demo-aviso">
-      <b>Demonstração.</b> Não há cadastro real nesta versão — entre com qualquer
-      e-mail e senha e escolha por qual lado quer ver o sistema.
-      <div style="display:flex;gap:.6rem;margin-top:.9rem;flex-wrap:wrap">
-        <a class="b b--fantasma" style="flex:1;min-width:130px" href="personal.html">Ver como personal</a>
-        <a class="b b--fantasma" style="flex:1;min-width:130px" href="treino.html">Ver como aluno</a>
-      </div>
-    </div>
+      <button class="b b--primario b--bloco" type="submit" id="entrar">Entrar</button>
+    </form>
   </div>
 </main>
 
 <script type="module">
-  // No protótipo o login não valida nada: ele existe para mostrar o formato.
-  // Quem digita um e-mail com "aluno" entra pelo lado do aluno; o resto, pelo
-  // do personal — assim dá para demonstrar os dois caminhos sem explicar nada.
-  document.getElementById('form').addEventListener('submit', (e) => {
+  import { entrar, perfilAtual, paginaDoPapel } from './js/auth.js';
+
+  const perfilJaLogado = await perfilAtual();
+  if (perfilJaLogado) {
+    window.location.replace(paginaDoPapel(perfilJaLogado.papel));
+  }
+
+  const form = document.getElementById('form');
+  const botao = document.getElementById('entrar');
+  const erro = document.getElementById('erro');
+
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const email = document.getElementById('email').value.toLowerCase();
-    const destino = email.includes('aluno') ? 'treino.html' : 'personal.html';
-    window.location.href = destino;
+    erro.hidden = true;
+    botao.disabled = true;
+    botao.textContent = 'Entrando…';
+
+    const email = document.getElementById('email').value;
+    const senha = document.getElementById('senha').value;
+    const resultado = await entrar(email, senha);
+
+    if (!resultado.ok) {
+      erro.textContent = resultado.erro;
+      erro.hidden = false;
+      botao.disabled = false;
+      botao.textContent = 'Entrar';
+      return;
+    }
+
+    window.location.href = paginaDoPapel(resultado.papel);
   });
 </script>
 
