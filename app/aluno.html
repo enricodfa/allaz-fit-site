@@ -26,16 +26,23 @@
 </main>
 
 <script type="module">
-import {dados, esc, aluno, planosDoAluno, sessoesDoAluno, divisao, letraDivisao,
-        montarTopo, icone, formatarDataLonga, formatarData, textoDiasDesde,
-        salvar, ultimoRegistro} from './js/demo.js';
+import { sb } from './js/supabase.js';
+import { exigirSessao } from './js/auth.js';
+import { esc, montarTopo, icone, formatarDataLonga } from './js/demo.js';
 
-const id = new URLSearchParams(location.search).get('id') ?? 'a1';
-const a = aluno(id);
+await exigirSessao('personal');
 
-if(!a){
+const alunoId = new URLSearchParams(location.search).get('id');
+if (!alunoId) window.location.replace('personal.html');
+
+// Se o RLS não devolveu o aluno, ele não é deste personal — ou não existe.
+// Nos dois casos a resposta é a mesma, para não revelar a existência da conta.
+const { data: a } = await sb
+  .from('profiles').select('id, nome, telefone').eq('id', alunoId).single();
+
+if (!a) {
   document.body.innerHTML = '<div class="vazio" style="margin:4rem auto;max-width:400px">Aluno não encontrado.</div>';
-  throw new Error('aluno inexistente');
+  throw new Error('aluno inacessivel');
 }
 
 document.getElementById('topo').innerHTML = montarTopo({
@@ -46,11 +53,20 @@ document.getElementById('topo').innerHTML = montarTopo({
 
 /* ---------- aba Planos ---------- */
 
-function desenharPlanos(){
-  const planos = planosDoAluno(a.id);
+async function desenharPlanos(){
   const el = document.getElementById('painel-planos');
+  const { data: planos, error } = await sb
+    .from('planos')
+    .select('id, nome, objetivo, ativo, inicio, divisoes(id)')
+    .eq('aluno_id', a.id)
+    .order('criado_em', { ascending: false });
 
-  const lista = planos.length === 0
+  if (error) {
+    el.innerHTML = '<div class="vazio">Não foi possível carregar os planos.</div>';
+    return;
+  }
+
+  const lista = (planos ?? []).length === 0
     ? `<div class="vazio">
          <strong>Nenhum plano ainda</strong>
          Monte o primeiro treino deste aluno.
@@ -83,120 +99,25 @@ function desenharPlanos(){
     ${lista}`;
 
   el.querySelectorAll('[data-ativar]').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
       // Ativar um plano desativa os outros: o aluno tem um treino da vez.
-      planosDoAluno(a.id).forEach(p => { p.ativo = (p.id === btn.dataset.ativar); });
-      salvar();
-      desenharPlanos();
+      await sb.from('planos').update({ ativo: false }).eq('aluno_id', a.id);
+      await sb.from('planos').update({ ativo: true }).eq('id', btn.dataset.ativar);
+      await desenharPlanos();
     });
   });
 }
 
 /* ---------- aba Histórico ---------- */
+// Fase 1: sem sessões registradas ainda (isso chega na Task 16). Estado vazio real.
 
 function desenharHistorico(){
   const el = document.getElementById('painel-historico');
-  const sessoes = sessoesDoAluno(a.id);
-
-  if(sessoes.length === 0){
-    el.innerHTML = `<div class="vazio">
-      <strong>Nenhum treino registrado</strong>
-      Quando ${esc(a.nome.split(' ')[0])} concluir um treino, ele aparece aqui.
-    </div>`;
-    return;
-  }
-
-  // Agrupado por divisão: o personal quer ver frequência por treino,
-  // não uma lista corrida de datas.
-  const grupos = new Map();
-  for(const s of sessoes){
-    if(!grupos.has(s.divisaoId)) grupos.set(s.divisaoId, []);
-    grupos.get(s.divisaoId).push(s);
-  }
-
-  const totalSemana = sessoes.filter(s => {
-    const dias = (Date.now() - new Date(s.em)) / 86400000;
-    return dias <= 7;
-  }).length;
-
-  el.innerHTML = `
-    <div class="plano-cartao" style="margin-bottom:1.2rem">
-      <div class="plano-cartao__meta" style="margin:0">
-        <strong style="color:var(--bone);font-size:1.6rem;font-family:var(--f-display)">${sessoes.length}</strong>
-        treinos registrados no total · <strong style="color:var(--bone)">${totalSemana}</strong> nos últimos 7 dias
-        · último ${esc(textoDiasDesde(sessoes[0].em))}
-      </div>
-    </div>
-    ${[...grupos.entries()].map(([divId, lista]) => {
-      const div = divisao(divId);
-      const nome = div ? div.nome : 'Treino removido';
-      const foco = div ? div.foco : '';
-      return `
-        <div class="historico-grupo">
-          <button class="historico-grupo__cabeca" data-grupo="${esc(divId)}" aria-expanded="false">
-            <span class="historico-grupo__letra">${esc(letraDivisao(nome))}</span>
-            <span class="historico-grupo__info">
-              <span class="historico-grupo__titulo">${esc(nome)}${foco ? ' — ' + esc(foco) : ''}</span>
-              <span class="historico-grupo__meta">
-                ${lista.length} ${lista.length === 1 ? 'vez' : 'vezes'}
-                · última em ${esc(formatarDataLonga(lista[0].em))}
-              </span>
-            </span>
-            <span class="aluno-linha__seta">${icone.baixo}</span>
-          </button>
-          <div class="historico-grupo__corpo" id="corpo-${esc(divId)}" hidden>
-            ${detalheGrupo(div, lista)}
-          </div>
-        </div>`;
-    }).join('')}`;
-
-  el.querySelectorAll('[data-grupo]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const corpo = document.getElementById('corpo-' + btn.dataset.grupo);
-      const aberto = !corpo.hidden;
-      corpo.hidden = aberto;
-      btn.setAttribute('aria-expanded', String(!aberto));
-    });
-  });
-}
-
-function detalheGrupo(div, sessoes){
-  if(!div) return '<p style="color:var(--smoke-2);font-size:.9rem">Este treino não existe mais no plano.</p>';
-
-  return div.exercicios.map(ex => {
-    const pontos = sessoes
-      .map(s => ({em:s.em, ...(s.registros?.[ex.id] ?? {})}))
-      .filter(p => p.carga != null || p.reps != null);
-
-    if(pontos.length === 0) return '';
-
-    return `
-      <div style="margin-bottom:1.1rem">
-        <div style="font-weight:600;color:var(--bone);font-size:.92rem;margin-bottom:.35rem">${esc(ex.nome)}</div>
-        <div class="evolucao">
-          ${pontos.map((p, i) => {
-            const anterior = pontos[i+1];
-            let delta = '';
-            if(anterior && p.carga != null && anterior.carga != null){
-              const dif = p.carga - anterior.carga;
-              if(dif > 0) delta = `<span class="evolucao__delta evolucao__delta--sobe">+${dif}</span>`;
-              else if(dif < 0) delta = `<span class="evolucao__delta evolucao__delta--desce">${dif}</span>`;
-              else delta = `<span class="evolucao__delta evolucao__delta--desce">=</span>`;
-            } else {
-              delta = '<span class="evolucao__delta"></span>';
-            }
-            const valor = p.carga != null ? `${p.carga} kg` : '—';
-            const reps = p.reps != null ? ` × ${p.reps}` : '';
-            return `
-              <div class="evolucao__linha">
-                <span class="evolucao__data">${esc(formatarData(p.em))}</span>
-                <span class="evolucao__ex">${esc(valor)}${esc(reps)}</span>
-                ${delta}
-              </div>`;
-          }).join('')}
-        </div>
-      </div>`;
-  }).join('') || '<p style="color:var(--smoke-2);font-size:.9rem">Treinos concluídos, mas sem cargas anotadas.</p>';
+  el.innerHTML = `<div class="vazio">
+    <strong>Nenhum treino registrado</strong>
+    Quando ${esc(a.nome.split(' ')[0])} concluir um treino, ele aparece aqui.
+  </div>`;
 }
 
 /* ---------- abas ---------- */

@@ -43,6 +43,7 @@
       <h2 class="modal__titulo">Novo aluno</h2>
     </div>
     <div class="modal__corpo">
+      <p class="aviso" id="n-erro" hidden></p>
       <label class="campo">
         <span class="campo__rotulo">Nome completo</span>
         <input id="n-nome" placeholder="Camila Souza" required>
@@ -58,7 +59,7 @@
         </label>
         <label class="campo">
           <span class="campo__rotulo">Senha inicial</span>
-          <input id="n-senha" value="allaz2026" required>
+          <input id="n-senha" value="allaz2026" required minlength="6">
         </label>
       </div>
       <p class="campo__dica">
@@ -67,33 +68,73 @@
       </p>
     </div>
     <div class="modal__rodape">
-      <button class="b b--fantasma" value="cancelar">Cancelar</button>
-      <button class="b b--primario" id="n-salvar" value="salvar">Cadastrar aluno</button>
+      <button class="b b--fantasma" type="button" id="n-cancelar">Cancelar</button>
+      <button class="b b--primario" type="button" id="n-salvar">Cadastrar aluno</button>
     </div>
   </form>
 </dialog>
 
 <script type="module">
-import {dados, esc, iniciais, montarTopo, icone, planoAtivo,
-        sessoesDoAluno, textoDiasDesde, diasDesde, salvar} from './js/demo.js';
+import { sb } from './js/supabase.js';
+import { exigirSessao, sair } from './js/auth.js';
+import { esc, iniciais, montarTopo, icone, textoDiasDesde, diasDesde } from './js/demo.js';
 
-const d = dados();
+const perfil = await exigirSessao('personal');
 
 document.getElementById('topo').innerHTML = montarTopo({
-  titulo: d.personal.nome,
+  titulo: perfil.nome,
   sub: 'Personal trainer',
-  acoes: `<a class="b b--sutil" href="index.html" title="Sair">${icone.sair}</a>`,
+  acoes: `<a class="b b--sutil" href="#" id="sair" title="Sair">${icone.sair}</a>`,
+});
+document.getElementById('sair').addEventListener('click', async (e) => {
+  e.preventDefault();
+  await sair();
+  window.location.replace('index.html');
 });
 
 const elLista = document.getElementById('lista');
 const elVazio = document.getElementById('vazio');
 const elBusca = document.getElementById('busca');
 
+let alunos = [];
+
+async function carregar(){
+  // Sem filtro por personal_id: o RLS já limita aos alunos deste personal.
+  const { data: perfis, error } = await sb
+    .from('profiles')
+    .select('id, nome, telefone')
+    .eq('papel', 'aluno')
+    .order('nome');
+
+  if (error) {
+    elVazio.innerHTML = `<div class="vazio">Não foi possível carregar seus alunos.</div>`;
+    return;
+  }
+
+  const [{ data: planos }, { data: sessoes }] = await Promise.all([
+    sb.from('planos').select('aluno_id, nome').eq('ativo', true),
+    sb.from('sessoes').select('aluno_id, concluido_em').order('concluido_em', { ascending: false }),
+  ]);
+
+  const planoPorAluno = new Map((planos ?? []).map(p => [p.aluno_id, p.nome]));
+  const ultimaPorAluno = new Map();
+  for (const s of sessoes ?? []) {
+    if (!ultimaPorAluno.has(s.aluno_id)) ultimaPorAluno.set(s.aluno_id, s.concluido_em);
+  }
+
+  alunos = (perfis ?? []).map(a => ({
+    ...a,
+    plano: planoPorAluno.get(a.id) ?? null,
+    ultima_sessao: ultimaPorAluno.get(a.id) ?? null,
+  }));
+  desenhar();
+}
+
 function desenhar(){
   const termo = elBusca.value.trim().toLowerCase();
-  const visiveis = d.alunos.filter(a => a.nome.toLowerCase().includes(termo));
+  const visiveis = alunos.filter(a => a.nome.toLowerCase().includes(termo));
 
-  if(d.alunos.length === 0){
+  if(alunos.length === 0){
     elVazio.innerHTML = `<div class="vazio">
       <strong>Nenhum aluno ainda</strong>
       Toque em “Novo aluno” para cadastrar o primeiro.
@@ -110,9 +151,7 @@ function desenhar(){
 
   elVazio.innerHTML = '';
   elLista.innerHTML = visiveis.map(a => {
-    const ultima = sessoesDoAluno(a.id)[0] ?? null;
-    const dias = diasDesde(ultima?.em);
-    const plano = planoAtivo(a.id);
+    const dias = diasDesde(a.ultima_sessao);
     // Quem sumiu é a informação que o personal procura nesta tela.
     const sumido = dias === null || dias >= 7;
     return `
@@ -121,38 +160,63 @@ function desenhar(){
         <div class="aluno-linha__corpo">
           <div class="aluno-linha__nome">${esc(a.nome)}</div>
           <div class="aluno-linha__meta">
-            ${plano ? esc(plano.nome) : 'Sem treino ativo'}
+            ${a.plano ? esc(a.plano) : 'Sem treino ativo'}
           </div>
         </div>
-        <span class="chip ${sumido ? 'chip--alerta' : ''}">${esc(textoDiasDesde(ultima?.em))}</span>
+        <span class="chip ${sumido ? 'chip--alerta' : ''}">${esc(textoDiasDesde(a.ultima_sessao))}</span>
         <span class="aluno-linha__seta">${icone.seta}</span>
       </a>`;
   }).join('');
 }
 
 elBusca.addEventListener('input', desenhar);
-desenhar();
+carregar();
 
 /* --- cadastro --- */
 const dlg = document.getElementById('dlg-novo');
-document.getElementById('novo-aluno').addEventListener('click', () => dlg.showModal());
+const elNErro = document.getElementById('n-erro');
+document.getElementById('novo-aluno').addEventListener('click', () => {
+  elNErro.hidden = true;
+  dlg.showModal();
+});
+document.getElementById('n-cancelar').addEventListener('click', () => dlg.close());
 
-dlg.addEventListener('close', () => {
-  if(dlg.returnValue !== 'salvar') return;
+document.getElementById('n-salvar').addEventListener('click', async () => {
   const nome = document.getElementById('n-nome').value.trim();
+  const email = document.getElementById('n-email').value.trim();
   const telefone = document.getElementById('n-telefone').value.trim();
-  if(!nome) return;
+  const senha = document.getElementById('n-senha').value;
 
-  d.alunos.push({
-    id: 'a' + (Date.now() % 100000),
-    nome, telefone,
-    desde: new Date().toISOString().slice(0,10),
+  if (!nome || !email || senha.length < 6) {
+    elNErro.textContent = 'Preencha nome, e-mail e uma senha com ao menos 6 caracteres.';
+    elNErro.hidden = false;
+    return;
+  }
+
+  const botao = document.getElementById('n-salvar');
+  botao.disabled = true;
+  const { data, error } = await sb.functions.invoke('criar-aluno', {
+    body: { nome, email, telefone, senha },
   });
-  salvar();
+  botao.disabled = false;
+
+  if (error) {
+    elNErro.textContent = 'Não foi possível falar com o servidor. Tente de novo.';
+    elNErro.hidden = false;
+    return;
+  }
+  if (!data.ok) {
+    elNErro.textContent = data.erro;
+    elNErro.hidden = false;
+    return;
+  }
+
+  dlg.close();
   document.getElementById('n-nome').value = '';
   document.getElementById('n-email').value = '';
   document.getElementById('n-telefone').value = '';
-  desenhar();
+  document.getElementById('n-senha').value = 'allaz2026';
+  await carregar();
 });
 </script>
 
