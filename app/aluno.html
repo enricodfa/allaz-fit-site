@@ -29,6 +29,7 @@
 import { sb } from './js/supabase.js';
 import { exigirSessao } from './js/auth.js';
 import { esc, montarTopo, icone, formatarDataLonga } from './js/demo.js';
+import { montarHistorico } from './js/historico.js';
 
 await exigirSessao('personal');
 
@@ -110,14 +111,11 @@ async function desenharPlanos(){
 }
 
 /* ---------- aba Histórico ---------- */
-// Fase 1: sem sessões registradas ainda (isso chega na Task 16). Estado vazio real.
+// Mesma consulta que o aluno vê na própria tela, com aluno_id fixado no
+// aluno da URL — o RLS garante que só chega aqui quem é deste personal.
 
 function desenharHistorico(){
-  const el = document.getElementById('painel-historico');
-  el.innerHTML = `<div class="vazio">
-    <strong>Nenhum treino registrado</strong>
-    Quando ${esc(a.nome.split(' ')[0])} concluir um treino, ele aparece aqui.
-  </div>`;
+  montarHistorico(a.id, document.getElementById('painel-historico'));
 }
 
 /* ---------- abas ---------- */

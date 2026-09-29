@@ -16,6 +16,8 @@
 <div id="topo"></div>
 
 <main class="app-conteudo app-conteudo--wide">
+  <p class="aviso" id="erro" hidden></p>
+
   <div class="plano-cartao" style="margin-bottom:1.6rem">
     <label class="campo" style="margin-bottom:.8rem">
       <span class="campo__rotulo">Nome do plano</span>
@@ -41,41 +43,77 @@
 </main>
 
 <script type="module">
-import {dados, esc, plano, aluno, montarTopo, icone, salvar as persistir} from './js/demo.js';
+import { sb } from './js/supabase.js';
+import { exigirSessao } from './js/auth.js';
+import { esc, montarTopo, icone, mostrarErro, limparErro } from './js/demo.js';
+
+const perfilPersonal = await exigirSessao('personal');
 
 const params = new URLSearchParams(location.search);
 const planoId = params.get('id');
 const alunoIdNovo = params.get('aluno');
 
-const d = dados();
-let p = planoId ? plano(planoId) : null;
-let novo = false;
+const elErro = document.getElementById('erro');
 
-if(!p){
-  // Plano novo: nasce com um treino e um exercício em branco, para o
-  // personal já ter onde digitar em vez de encarar uma tela vazia.
-  novo = true;
-  p = {
-    id: 'p' + (Date.now() % 100000),
-    alunoId: alunoIdNovo ?? 'a1',
-    nome: '', objetivo: '', ativo: false,
-    inicio: new Date().toISOString().slice(0,10),
-    divisoes: [{id:'d'+Date.now(), nome:'Treino A', foco:'', exercicios:[exVazio()]}],
-  };
+function exVazio(ordem){
+  return { id: null, nome: '', series: 3, repeticoes: '10', carga: '',
+           descanso_seg: 60, observacoes: '', video_url: '', ordem };
 }
 
-const a = aluno(p.alunoId);
+let plano;
+let idsOriginaisDivisoes = new Set();
+let idsOriginaisExercicios = new Set();
+let a; // aluno dono do plano
+
+if (planoId) {
+  const { data: p } = await sb.from('planos')
+    .select('id, aluno_id, nome, objetivo, inicio, fim').eq('id', planoId).single();
+
+  if (!p) {
+    document.body.innerHTML = '<div class="vazio" style="margin:4rem auto;max-width:400px">Plano não encontrado.</div>';
+    throw new Error('plano inacessivel');
+  }
+
+  const { data: ds } = await sb.from('divisoes')
+    .select('id, nome, foco, ordem').eq('plano_id', planoId).order('ordem');
+  const divIds = (ds ?? []).map(d => d.id);
+  const { data: exs } = divIds.length
+    ? await sb.from('exercicios')
+        .select('id, divisao_id, nome, series, repeticoes, carga, descanso_seg, observacoes, video_url, ordem')
+        .in('divisao_id', divIds).order('ordem')
+    : { data: [] };
+
+  plano = {
+    ...p,
+    divisoes: (ds ?? []).map(d => ({
+      ...d,
+      exercicios: (exs ?? []).filter(e => e.divisao_id === d.id),
+    })),
+  };
+  idsOriginaisDivisoes = new Set(divIds);
+  idsOriginaisExercicios = new Set((exs ?? []).map(e => e.id));
+
+  const { data: alunoRow } = await sb.from('profiles').select('id, nome').eq('id', p.aluno_id).single();
+  a = alunoRow;
+} else {
+  plano = {
+    id: null, aluno_id: alunoIdNovo, nome: '', objetivo: '', inicio: null, fim: null,
+    divisoes: [{ id: null, nome: 'Treino A', foco: '', ordem: 0, exercicios: [exVazio(0)] }],
+  };
+  const { data: alunoRow } = await sb.from('profiles').select('id, nome').eq('id', alunoIdNovo).single();
+  a = alunoRow;
+}
+
+if (!a) {
+  document.body.innerHTML = '<div class="vazio" style="margin:4rem auto;max-width:400px">Aluno não encontrado.</div>';
+  throw new Error('aluno inacessivel');
+}
 
 document.getElementById('topo').innerHTML = montarTopo({
-  titulo: novo ? 'Novo treino' : 'Editar treino',
-  sub: a ? a.nome : '',
-  voltar: `aluno.html?id=${esc(p.alunoId)}`,
+  titulo: planoId ? 'Editar treino' : 'Novo treino',
+  sub: a.nome,
+  voltar: `aluno.html?id=${esc(a.id)}`,
 });
-
-function exVazio(){
-  return {id:'e'+Math.random().toString(36).slice(2,8), nome:'', series:3, reps:'10',
-          carga:'', descanso:'60s', obs:'', video:''};
-}
 
 let sujo = false;
 function marcarSujo(){
@@ -85,23 +123,23 @@ function marcarSujo(){
   el.classList.add('barra-salvar__estado--sujo');
 }
 
-document.getElementById('p-nome').value = p.nome;
-document.getElementById('p-objetivo').value = p.objetivo;
-document.getElementById('p-nome').addEventListener('input', e => { p.nome = e.target.value; marcarSujo(); });
-document.getElementById('p-objetivo').addEventListener('input', e => { p.objetivo = e.target.value; marcarSujo(); });
+document.getElementById('p-nome').value = plano.nome;
+document.getElementById('p-objetivo').value = plano.objetivo ?? '';
+document.getElementById('p-nome').addEventListener('input', e => { plano.nome = e.target.value; marcarSujo(); });
+document.getElementById('p-objetivo').addEventListener('input', e => { plano.objetivo = e.target.value; marcarSujo(); });
 
 const elDivisoes = document.getElementById('divisoes');
 
 function desenhar(){
-  elDivisoes.innerHTML = p.divisoes.map((div, di) => `
+  elDivisoes.innerHTML = plano.divisoes.map((div, di) => `
     <div class="divisao-editor" data-div="${di}">
       <div class="divisao-editor__cabeca">
         <input class="divisao-editor__nome" value="${esc(div.nome)}"
                data-campo="nome" aria-label="Nome do treino">
-        <input class="divisao-editor__foco" value="${esc(div.foco)}"
+        <input class="divisao-editor__foco" value="${esc(div.foco ?? '')}"
                data-campo="foco" placeholder="Peito e tríceps" aria-label="Foco do treino">
         <button class="b--icone" data-mover-div="${di}" data-dir="-1" title="Subir" ${di === 0 ? 'disabled' : ''}>${icone.cima}</button>
-        <button class="b--icone" data-mover-div="${di}" data-dir="1" title="Descer" ${di === p.divisoes.length-1 ? 'disabled' : ''}>${icone.baixo}</button>
+        <button class="b--icone" data-mover-div="${di}" data-dir="1" title="Descer" ${di === plano.divisoes.length-1 ? 'disabled' : ''}>${icone.baixo}</button>
         <button class="b--icone b--perigo" data-remover-div="${di}" title="Remover treino">${icone.lixo}</button>
       </div>
       <div class="divisao-editor__corpo">
@@ -122,25 +160,25 @@ function desenhar(){
               <label><span>Séries</span>
                 <input value="${esc(ex.series ?? '')}" data-ex="${di}.${ei}" data-campo="series" inputmode="numeric"></label>
               <label><span>Repetições</span>
-                <input value="${esc(ex.reps ?? '')}" data-ex="${di}.${ei}" data-campo="reps" placeholder="8-12"></label>
+                <input value="${esc(ex.repeticoes ?? '')}" data-ex="${di}.${ei}" data-campo="repeticoes" placeholder="8-12"></label>
               <label><span>Carga</span>
                 <input value="${esc(ex.carga ?? '')}" data-ex="${di}.${ei}" data-campo="carga" placeholder="40 kg"></label>
-              <label><span>Descanso</span>
-                <input value="${esc(ex.descanso ?? '')}" data-ex="${di}.${ei}" data-campo="descanso" placeholder="60s"></label>
+              <label><span>Descanso (seg)</span>
+                <input value="${esc(ex.descanso_seg ?? '')}" data-ex="${di}.${ei}" data-campo="descanso_seg" inputmode="numeric" placeholder="60"></label>
             </div>
 
             <label class="campo" style="margin-bottom:.6rem">
               <span class="campo__rotulo">Observação para o aluno</span>
-              <input value="${esc(ex.obs ?? '')}" data-ex="${di}.${ei}" data-campo="obs"
+              <input value="${esc(ex.observacoes ?? '')}" data-ex="${di}.${ei}" data-campo="observacoes"
                      placeholder="Desça controlando em 3 segundos.">
             </label>
 
             <label class="campo" style="margin-bottom:0">
               <span class="campo__rotulo">Vídeo de execução</span>
-              <input value="${esc(ex.video ?? '')}" data-ex="${di}.${ei}" data-campo="video"
+              <input value="${esc(ex.video_url ?? '')}" data-ex="${di}.${ei}" data-campo="video_url"
                      placeholder="https://youtube.com/watch?v=...">
               <span class="campo__dica">
-                Cole o link do YouTube. Publique como “não listado”: o vídeo não
+                Cole o link do YouTube. Dica: publique o vídeo como "não listado" — ele não
                 aparece em buscas, mas funciona pelo link.
               </span>
             </label>
@@ -157,7 +195,7 @@ function ligarEventos(){
   elDivisoes.querySelectorAll('.divisao-editor__cabeca input').forEach(inp => {
     inp.addEventListener('input', e => {
       const di = +e.target.closest('[data-div]').dataset.div;
-      p.divisoes[di][e.target.dataset.campo] = e.target.value;
+      plano.divisoes[di][e.target.dataset.campo] = e.target.value;
       marcarSujo();
     });
   });
@@ -165,14 +203,15 @@ function ligarEventos(){
   elDivisoes.querySelectorAll('[data-ex]').forEach(inp => {
     inp.addEventListener('input', e => {
       const [di, ei] = e.target.dataset.ex.split('.').map(Number);
-      p.divisoes[di].exercicios[ei][e.target.dataset.campo] = e.target.value;
+      plano.divisoes[di].exercicios[ei][e.target.dataset.campo] = e.target.value;
       marcarSujo();
     });
   });
 
   elDivisoes.querySelectorAll('[data-add-ex]').forEach(b => {
     b.addEventListener('click', () => {
-      p.divisoes[+b.dataset.addEx].exercicios.push(exVazio());
+      const div = plano.divisoes[+b.dataset.addEx];
+      div.exercicios.push(exVazio(div.exercicios.length));
       marcarSujo(); desenhar();
     });
   });
@@ -180,7 +219,7 @@ function ligarEventos(){
   elDivisoes.querySelectorAll('[data-remover-ex]').forEach(b => {
     b.addEventListener('click', () => {
       const [di, ei] = b.dataset.removerEx.split('.').map(Number);
-      p.divisoes[di].exercicios.splice(ei, 1);
+      plano.divisoes[di].exercicios.splice(ei, 1);
       marcarSujo(); desenhar();
     });
   });
@@ -189,7 +228,7 @@ function ligarEventos(){
     b.addEventListener('click', () => {
       const [di, ei] = b.dataset.moverEx.split('.').map(Number);
       const dir = +b.dataset.dir;
-      const arr = p.divisoes[di].exercicios;
+      const arr = plano.divisoes[di].exercicios;
       [arr[ei], arr[ei+dir]] = [arr[ei+dir], arr[ei]];
       marcarSujo(); desenhar();
     });
@@ -197,7 +236,7 @@ function ligarEventos(){
 
   elDivisoes.querySelectorAll('[data-remover-div]').forEach(b => {
     b.addEventListener('click', () => {
-      p.divisoes.splice(+b.dataset.removerDiv, 1);
+      plano.divisoes.splice(+b.dataset.removerDiv, 1);
       marcarSujo(); desenhar();
     });
   });
@@ -205,37 +244,130 @@ function ligarEventos(){
   elDivisoes.querySelectorAll('[data-mover-div]').forEach(b => {
     b.addEventListener('click', () => {
       const di = +b.dataset.moverDiv, dir = +b.dataset.dir;
-      [p.divisoes[di], p.divisoes[di+dir]] = [p.divisoes[di+dir], p.divisoes[di]];
+      [plano.divisoes[di], plano.divisoes[di+dir]] = [plano.divisoes[di+dir], plano.divisoes[di]];
       marcarSujo(); desenhar();
     });
   });
 }
 
 document.getElementById('add-divisao').addEventListener('click', () => {
-  const letra = String.fromCharCode(65 + p.divisoes.length); // A, B, C...
-  p.divisoes.push({id:'d'+Date.now(), nome:`Treino ${letra}`, foco:'', exercicios:[exVazio()]});
+  const letra = String.fromCharCode(65 + plano.divisoes.length); // A, B, C...
+  plano.divisoes.push({ id: null, nome: `Treino ${letra}`, foco: '', ordem: plano.divisoes.length,
+                         exercicios: [exVazio(0)] });
   marcarSujo(); desenhar();
 });
 
-document.getElementById('salvar').addEventListener('click', () => {
-  if(!p.nome.trim()){
+function numOuNulo(v){
+  return v === '' || v == null ? null : Number(v);
+}
+
+document.getElementById('salvar').addEventListener('click', async () => {
+  limparErro(elErro);
+
+  if (!plano.nome.trim()) {
     document.getElementById('p-nome').focus();
-    document.getElementById('estado').textContent = 'Dê um nome ao plano';
+    mostrarErro(elErro, 'Dê um nome ao plano.');
     return;
   }
-  if(novo){
-    d.planos.push(p);
-    novo = false;
+  for (const div of plano.divisoes) {
+    if (!div.nome.trim()) { mostrarErro(elErro, 'Todo treino precisa de um nome.'); return; }
+    for (const ex of div.exercicios) {
+      if (!ex.nome.trim()) { mostrarErro(elErro, 'Todo exercício precisa de um nome.'); return; }
+    }
   }
-  persistir();
-  sujo = false;
-  const el = document.getElementById('estado');
-  el.textContent = 'Salvo';
-  el.classList.remove('barra-salvar__estado--sujo');
+
+  const botao = document.getElementById('salvar');
+  botao.disabled = true;
+
+  try {
+    if (!plano.id) {
+      const { data, error } = await sb.from('planos').insert({
+        aluno_id: plano.aluno_id, personal_id: perfilPersonal.id,
+        nome: plano.nome, objetivo: plano.objetivo || null,
+        inicio: plano.inicio, fim: plano.fim,
+      }).select('id').single();
+      if (error) throw error;
+      plano.id = data.id;
+    } else {
+      const { error } = await sb.from('planos').update({
+        nome: plano.nome, objetivo: plano.objetivo || null,
+        inicio: plano.inicio, fim: plano.fim,
+      }).eq('id', plano.id);
+      if (error) throw error;
+    }
+
+    const idsDivisoesAtuais = new Set();
+    for (let di = 0; di < plano.divisoes.length; di++) {
+      const div = plano.divisoes[di];
+      if (!div.id) {
+        const { data, error } = await sb.from('divisoes').insert({
+          plano_id: plano.id, nome: div.nome, foco: div.foco || null, ordem: di,
+        }).select('id').single();
+        if (error) throw error;
+        div.id = data.id;
+      } else {
+        const { error } = await sb.from('divisoes')
+          .update({ nome: div.nome, foco: div.foco || null, ordem: di }).eq('id', div.id);
+        if (error) throw error;
+      }
+      idsDivisoesAtuais.add(div.id);
+
+      const idsExerciciosAtuais = new Set();
+      for (let ei = 0; ei < div.exercicios.length; ei++) {
+        const ex = div.exercicios[ei];
+        const campos = {
+          divisao_id: div.id, nome: ex.nome,
+          series: numOuNulo(ex.series), repeticoes: ex.repeticoes || null,
+          carga: ex.carga || null, descanso_seg: numOuNulo(ex.descanso_seg),
+          observacoes: ex.observacoes || null, video_url: ex.video_url || null, ordem: ei,
+        };
+        if (!ex.id) {
+          const { data, error } = await sb.from('exercicios').insert(campos).select('id').single();
+          if (error) throw error;
+          ex.id = data.id;
+        } else {
+          const { error } = await sb.from('exercicios').update(campos).eq('id', ex.id);
+          if (error) throw error;
+        }
+        idsExerciciosAtuais.add(ex.id);
+      }
+    }
+
+    // Apaga do banco o que existia ao carregar e não está mais no estado.
+    const exerciciosQueFicaram = new Set(plano.divisoes.flatMap(d => d.exercicios.map(e => e.id)));
+    const exerciciosParaApagar = [...idsOriginaisExercicios].filter(id => !exerciciosQueFicaram.has(id));
+    if (exerciciosParaApagar.length) {
+      const { error } = await sb.from('exercicios').delete().in('id', exerciciosParaApagar);
+      if (error) throw error;
+    }
+
+    const divisoesQueFicaram = new Set(plano.divisoes.map(d => d.id));
+    const divisoesParaApagar = [...idsOriginaisDivisoes].filter(id => !divisoesQueFicaram.has(id));
+    if (divisoesParaApagar.length) {
+      const { error } = await sb.from('divisoes').delete().in('id', divisoesParaApagar);
+      if (error) throw error;
+    }
+
+    idsOriginaisDivisoes = idsDivisoesAtuais_seguro();
+    idsOriginaisExercicios = exerciciosQueFicaram;
+
+    function idsDivisoesAtuais_seguro(){
+      return new Set(plano.divisoes.map(d => d.id));
+    }
+
+    sujo = false;
+    const el = document.getElementById('estado');
+    el.textContent = 'Salvo';
+    el.classList.remove('barra-salvar__estado--sujo');
+  } catch (err) {
+    mostrarErro(elErro, 'Não foi possível salvar. Tente de novo.');
+  } finally {
+    botao.disabled = false;
+  }
 });
 
 window.addEventListener('beforeunload', e => {
-  if(sujo){ e.preventDefault(); e.returnValue = ''; }
+  if (sujo) { e.preventDefault(); e.returnValue = ''; }
 });
 
 desenhar();

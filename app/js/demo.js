@@ -15,6 +15,16 @@ export function esc(t){
   ));
 }
 
+export function mostrarErro(elemento, mensagem){
+  elemento.textContent = mensagem;
+  elemento.hidden = false;
+}
+
+export function limparErro(elemento){
+  elemento.textContent = '';
+  elemento.hidden = true;
+}
+
 export function hoje(){
   const d = new Date(); d.setHours(0,0,0,0); return d;
 }

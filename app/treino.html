@@ -24,43 +24,58 @@
   <section id="tela-perfil" hidden></section>
 </main>
 
-<dialog id="dlg-video">
-  <div class="modal__cabeca">
-    <h2 class="modal__titulo" id="v-titulo">Execução</h2>
-    <button class="b--icone" id="v-fechar" title="Fechar">✕</button>
-  </div>
-  <div class="modal__corpo" id="v-corpo"></div>
-</dialog>
-
 <script type="module">
-import {dados, esc, icone, montarTopo, planoAtivo, letraDivisao,
-        sessoesDoAluno, ultimaSessaoDaDivisao, textoDiasDesde, diasDesde,
-        ultimoRegistro, textoUltimoRegistro, formatarDataLonga, formatarData,
-        divisao, resolverVideo, salvar, reiniciar} from './js/demo.js';
+import { sb } from './js/supabase.js';
+import { exigirSessao, sair, trocarSenha } from './js/auth.js';
+import { esc, icone, montarTopo, letraDivisao, textoDiasDesde, diasDesde,
+         textoUltimoRegistro, mostrarErro, limparErro } from './js/demo.js';
+import { resolverVideo, abrirVideo } from './js/video.js';
+import { montarHistorico } from './js/historico.js';
+import { lerRascunho, salvarRascunho, limparRascunho } from './js/rascunho.js';
 
-/* No protótipo o aluno é sempre a Camila — a conta com histórico, para a
-   demonstração ter o que mostrar. */
-const ALUNO_ID = 'a1';
-const d = dados();
-const eu = d.alunos.find(a => a.id === ALUNO_ID);
+const perfil = await exigirSessao('aluno');
 
 document.getElementById('topo').innerHTML = montarTopo({
-  titulo: eu.nome.split(' ')[0],
+  titulo: perfil.nome.split(' ')[0],
   sub: 'Aluno',
-  acoes: `<a class="b b--sutil" href="index.html" title="Sair">${icone.sair}</a>`,
 });
+
+/* ---------- plano ativo (carregado uma vez; sessões/registros são buscados
+   sob demanda, pois mudam a cada treino concluído) ---------- */
+
+const { data: planoRow } = await sb.from('planos')
+  .select('id, nome, objetivo')
+  .eq('aluno_id', perfil.id).eq('ativo', true)
+  .order('criado_em', { ascending: false })
+  .limit(1).maybeSingle();
+
+let plano = null;
+if (planoRow) {
+  const { data: ds } = await sb.from('divisoes')
+    .select('id, nome, foco, ordem').eq('plano_id', planoRow.id).order('ordem');
+  const divIds = (ds ?? []).map(d => d.id);
+  const { data: exs } = divIds.length
+    ? await sb.from('exercicios')
+        .select('id, divisao_id, nome, series, repeticoes, carga, descanso_seg, observacoes, video_url, ordem')
+        .in('divisao_id', divIds).order('ordem')
+    : { data: [] };
+  plano = {
+    ...planoRow,
+    divisoes: (ds ?? []).map(d => ({ ...d, exercicios: (exs ?? []).filter(e => e.divisao_id === d.id) })),
+  };
+}
 
 /* ---------- navegação ---------- */
 
 const telas = [
-  {id:'hoje',      rotulo:'Hoje',      icone:icone.casa},
-  {id:'treino',    rotulo:'Treino',    icone:icone.halter},
-  {id:'historico', rotulo:'Histórico', icone:icone.grafico},
-  {id:'perfil',    rotulo:'Perfil',    icone:icone.pessoa},
+  { id: 'hoje',      rotulo: 'Hoje',      icone: icone.casa },
+  { id: 'treino',    rotulo: 'Treino',    icone: icone.halter },
+  { id: 'historico', rotulo: 'Histórico', icone: icone.grafico },
+  { id: 'perfil',    rotulo: 'Perfil',    icone: icone.pessoa },
 ];
 
 document.getElementById('nav').innerHTML = telas.map(t => `
-  <button data-tela="${t.id}" aria-current="${t.id === 'hoje'}">
+  <button data-tela="${t.id}" aria-current="false">
     ${t.icone}<span>${t.rotulo}</span>
   </button>`).join('');
 
@@ -71,40 +86,55 @@ function irPara(id){
     document.getElementById('tela-' + t.id).hidden = t.id !== id;
     document.querySelector(`[data-tela="${t.id}"]`).setAttribute('aria-current', String(t.id === id));
   });
-  window.scrollTo(0,0);
-  if(id === 'hoje') desenharHoje();
-  if(id === 'treino') desenharTreino();
-  if(id === 'historico') desenharHistorico();
+  window.scrollTo(0, 0);
+  if (location.hash.slice(1) !== id) history.replaceState(null, '', '#' + id);
+  if (id === 'hoje') desenharHoje();
+  if (id === 'treino') desenharTreino();
+  if (id === 'historico') montarHistorico(perfil.id, document.getElementById('tela-historico'));
+  if (id === 'perfil') desenharPerfil();
 }
 
 document.querySelectorAll('[data-tela]').forEach(b => {
   b.addEventListener('click', () => irPara(b.dataset.tela));
 });
 
+window.addEventListener('hashchange', () => {
+  const id = location.hash.slice(1);
+  if (telas.some(t => t.id === id)) irPara(id);
+});
+
 /* ---------- Hoje ---------- */
 
-function desenharHoje(){
+async function desenharHoje(){
   const el = document.getElementById('tela-hoje');
-  const p = planoAtivo(ALUNO_ID);
 
-  if(!p){
+  if (!plano) {
     el.innerHTML = `<div class="vazio" style="margin-top:2rem">
-      <strong>Você ainda não tem treino</strong>
-      Fale com seu personal para montar o seu plano.
+      <strong>Você ainda não tem um treino ativo</strong>
+      Fale com seu personal.
     </div>`;
     return;
+  }
+
+  const { data: ultimas } = await sb.from('sessoes')
+    .select('divisao_id, concluido_em')
+    .in('divisao_id', plano.divisoes.map(d => d.id))
+    .order('concluido_em', { ascending: false });
+  const ultimaPorDivisao = {};
+  for (const s of ultimas ?? []) {
+    if (!(s.divisao_id in ultimaPorDivisao)) ultimaPorDivisao[s.divisao_id] = s.concluido_em;
   }
 
   el.innerHTML = `
     <div class="tela-cabecalho">
       <h1 class="tela-titulo">Bom treino</h1>
-      <p class="tela-sub">${esc(p.nome)}${p.objetivo ? ' · ' + esc(p.objetivo) : ''}</p>
+      <p class="tela-sub">${esc(plano.nome)}${plano.objetivo ? ' · ' + esc(plano.objetivo) : ''}</p>
     </div>
 
     <div class="lista">
-      ${p.divisoes.map(div => {
-        const ultima = ultimaSessaoDaDivisao(ALUNO_ID, div.id);
-        const dias = diasDesde(ultima?.em);
+      ${plano.divisoes.map(div => {
+        const ultima = ultimaPorDivisao[div.id] ?? null;
+        const dias = diasDesde(ultima);
         const frio = dias === null || dias >= 5;
         const atrasado = dias === null || dias >= 7;
         return `
@@ -116,7 +146,7 @@ function desenharHoje(){
             <span class="divisao-cartao__rodape">
               <span>${div.exercicios.length} exercícios</span>
               <span class="divisao-cartao__quando ${atrasado ? 'divisao-cartao__quando--atrasado' : ''}">
-                ${esc(textoDiasDesde(ultima?.em))}
+                ${esc(textoDiasDesde(ultima))}
               </span>
             </span>
           </button>`;
@@ -133,32 +163,38 @@ function desenharHoje(){
 
 /* ---------- Treino ---------- */
 
-/* O que o aluno digita fica no aparelho até ele concluir: fechar o app sem
-   querer no meio da série não pode custar o registro. */
-const rascunhoChave = id => `allazfit-demo-rascunho-${id}`;
-function lerRascunho(id){
-  try{ return JSON.parse(localStorage.getItem(rascunhoChave(id))) ?? {}; }catch{ return {}; }
-}
-function gravarRascunho(id, dados){
-  try{ localStorage.setItem(rascunhoChave(id), JSON.stringify(dados)); }catch{}
-}
-function limparRascunho(id){
-  try{ localStorage.removeItem(rascunhoChave(id)); }catch{}
-}
-
-function desenharTreino(){
+async function desenharTreino(){
   const el = document.getElementById('tela-treino');
-  const p = planoAtivo(ALUNO_ID);
-  const div = divisaoAberta ? divisao(divisaoAberta) : (p?.divisoes[0] ?? null);
 
-  if(!div){
+  if (!plano) {
+    el.innerHTML = `<div class="vazio" style="margin-top:2rem">
+      <strong>Nenhum treino ativo</strong>
+      Fale com seu personal para montar o seu plano.
+    </div>`;
+    return;
+  }
+
+  const div = divisaoAberta ? plano.divisoes.find(d => d.id === divisaoAberta) : plano.divisoes[0];
+  if (!div) {
     el.innerHTML = `<div class="vazio" style="margin-top:2rem">
       <strong>Nenhum treino selecionado</strong>
-      Volte para “Hoje” e escolha o treino do dia.
+      Volte para "Hoje" e escolha o treino do dia.
     </div>`;
     return;
   }
   divisaoAberta = div.id;
+
+  const { data: anteriores } = await sb
+    .from('registros')
+    .select('exercicio_id, carga, repeticoes, sessoes!inner(concluido_em)')
+    .in('exercicio_id', div.exercicios.map(e => e.id))
+    .order('concluido_em', { referencedTable: 'sessoes', ascending: false });
+  // Primeira ocorrência de cada exercício = a mais recente.
+  const ultimoRegistro = {};
+  for (const r of anteriores ?? []) {
+    if (!(r.exercicio_id in ultimoRegistro)) ultimoRegistro[r.exercicio_id] = r;
+  }
+
   const rascunho = lerRascunho(div.id);
 
   el.innerHTML = `
@@ -168,12 +204,12 @@ function desenharTreino(){
     </div>
 
     ${div.exercicios.map(ex => {
-      const anterior = ultimoRegistro(ALUNO_ID, ex.id);
+      const anterior = ultimoRegistro[ex.id] ?? null;
       const r = rascunho[ex.id] ?? {};
-      const temVideo = !!resolverVideo(ex.video);
+      const temVideo = !!resolverVideo(ex.video_url);
       const detalhes = [
         ex.carga ? `<span>${esc(ex.carga)}</span>` : '',
-        ex.descanso ? `<span>descanso ${esc(ex.descanso)}</span>` : '',
+        ex.descanso_seg ? `<span>descanso ${esc(ex.descanso_seg)}s</span>` : '',
       ].filter(Boolean).join('');
 
       return `
@@ -188,11 +224,11 @@ function desenharTreino(){
           <div class="prescricao">
             <span class="prescricao__series">${esc(ex.series ?? '')}</span>
             <span class="prescricao__x">×</span>
-            <span class="prescricao__series">${esc(ex.reps ?? '')}</span>
+            <span class="prescricao__series">${esc(ex.repeticoes ?? '')}</span>
             <span class="prescricao__detalhes">${detalhes}</span>
           </div>
 
-          ${ex.obs ? `<p class="exercicio__obs">${esc(ex.obs)}</p>` : ''}
+          ${ex.observacoes ? `<p class="exercicio__obs">${esc(ex.observacoes)}</p>` : ''}
 
           <div class="registro">
             <span class="registro__campo">
@@ -202,13 +238,13 @@ function desenharTreino(){
             </span>
             <span class="registro__campo">
               <label for="r-${esc(ex.id)}">Repetições</label>
-              <input id="r-${esc(ex.id)}" inputmode="numeric" value="${esc(r.reps ?? '')}"
-                     placeholder="${esc(anterior?.reps ?? '—')}" data-campo="reps" data-de="${esc(ex.id)}">
+              <input id="r-${esc(ex.id)}" inputmode="numeric" value="${esc(r.repeticoes ?? '')}"
+                     placeholder="${esc(anterior?.repeticoes ?? '—')}" data-campo="repeticoes" data-de="${esc(ex.id)}">
             </span>
             <button class="feito-btn" data-feito="${esc(ex.id)}" aria-pressed="${!!r.feito}">
               ${icone.check} Feito
             </button>
-            ${temVideo ? `<button class="feito-btn" data-video="${esc(ex.id)}">${icone.play} Execução</button>` : ''}
+            ${temVideo ? `<button class="feito-btn" data-video="${esc(ex.id)}">${icone.play} Ver execução</button>` : ''}
           </div>
         </article>`;
     }).join('')}
@@ -220,6 +256,7 @@ function desenharTreino(){
           <span class="treino-progresso__preenchido" id="prog-barra" style="width:0%"></span>
         </span>
       </div>
+      <p class="aviso" id="erro-treino" hidden></p>
       <label class="campo">
         <span class="campo__rotulo">Como foi o treino? (opcional)</span>
         <textarea id="obs-sessao" placeholder="Ombro incomodou na terceira série.">${esc(rascunho.__obs ?? '')}</textarea>
@@ -229,14 +266,14 @@ function desenharTreino(){
 
   /* --- interação --- */
 
-  const salvarRascunho = () => gravarRascunho(div.id, rascunho);
+  const salvarRascunhoAtual = () => salvarRascunho(div.id, rascunho);
 
   el.querySelectorAll('[data-campo]').forEach(inp => {
     inp.addEventListener('input', e => {
       const id = e.target.dataset.de;
       rascunho[id] = rascunho[id] ?? {};
       rascunho[id][e.target.dataset.campo] = e.target.value;
-      salvarRascunho();
+      salvarRascunhoAtual();
       atualizarProgresso();
     });
   });
@@ -248,7 +285,7 @@ function desenharTreino(){
       rascunho[id].feito = !rascunho[id].feito;
       b.setAttribute('aria-pressed', String(!!rascunho[id].feito));
       b.closest('.exercicio').classList.toggle('exercicio--feito', !!rascunho[id].feito);
-      salvarRascunho();
+      salvarRascunhoAtual();
       atualizarProgresso();
     });
   });
@@ -256,13 +293,13 @@ function desenharTreino(){
   el.querySelectorAll('[data-video]').forEach(b => {
     b.addEventListener('click', () => {
       const ex = div.exercicios.find(x => x.id === b.dataset.video);
-      abrirVideo(ex);
+      abrirVideo(ex.video_url, ex.nome);
     });
   });
 
   document.getElementById('obs-sessao').addEventListener('input', e => {
     rascunho.__obs = e.target.value;
-    salvarRascunho();
+    salvarRascunhoAtual();
   });
 
   function atualizarProgresso(){
@@ -273,193 +310,120 @@ function desenharTreino(){
   }
   atualizarProgresso();
 
-  document.getElementById('concluir').addEventListener('click', () => {
-    const registros = {};
-    for(const ex of div.exercicios){
-      const r = rascunho[ex.id];
-      if(!r) continue;
-      const carga = r.carga === '' || r.carga == null ? null : Number(r.carga);
-      const reps  = r.reps  === '' || r.reps  == null ? null : Number(r.reps);
-      if(carga != null || reps != null || r.feito) registros[ex.id] = {carga, reps};
+  document.getElementById('concluir').addEventListener('click', async () => {
+    const elErroTreino = document.getElementById('erro-treino');
+    limparErro(elErroTreino);
+    const botao = document.getElementById('concluir');
+    botao.disabled = true;
+
+    // Uma sessão, depois os registros dela. Se os registros falharem, a
+    // sessão é apagada — meia sessão salva corromperia o histórico.
+    const { data: sessao, error: erroSessao } = await sb
+      .from('sessoes')
+      .insert({ aluno_id: perfil.id, divisao_id: div.id, observacao: rascunho.__obs || null })
+      .select('id').single();
+
+    if (erroSessao) {
+      mostrarErro(elErroTreino, 'Não foi possível salvar o treino.');
+      botao.disabled = false;
+      return;
     }
 
-    d.sessoes.unshift({
-      id: 's' + Date.now(),
-      alunoId: ALUNO_ID,
-      divisaoId: div.id,
-      em: new Date().toISOString(),
-      obs: rascunho.__obs ?? '',
-      registros,
+    const linhas = div.exercicios.map(ex => {
+      const r = rascunho[ex.id] ?? {};
+      return {
+        sessao_id: sessao.id,
+        exercicio_id: ex.id,
+        carga: r.carga === '' || r.carga == null ? null : Number(r.carga),
+        repeticoes: r.repeticoes === '' || r.repeticoes == null ? null : Number(r.repeticoes),
+        feito: r.feito ?? false,
+      };
     });
-    salvar();
+
+    const { error: erroRegistros } = await sb.from('registros').insert(linhas);
+    if (erroRegistros) {
+      await sb.from('sessoes').delete().eq('id', sessao.id);
+      mostrarErro(elErroTreino, 'Não foi possível salvar o treino.');
+      botao.disabled = false;
+      return;
+    }
+
     limparRascunho(div.id);
     irPara('hoje');
   });
 }
 
-/* ---------- vídeo ---------- */
+/* ---------- Perfil ---------- */
 
-const dlgVideo = document.getElementById('dlg-video');
-document.getElementById('v-fechar').addEventListener('click', () => dlgVideo.close());
-// Sem isto o vídeo continua tocando com o modal fechado.
-dlgVideo.addEventListener('close', () => { document.getElementById('v-corpo').innerHTML = ''; });
-
-function abrirVideo(ex){
-  const v = resolverVideo(ex.video);
-  document.getElementById('v-titulo').textContent = ex.nome;
-  const corpo = document.getElementById('v-corpo');
-
-  if(v?.tipo === 'youtube'){
-    corpo.innerHTML = `<div class="video-quadro">
-      <iframe src="${esc(v.embedUrl)}" allowfullscreen
-              allow="accelerometer; encrypted-media; gyroscope; picture-in-picture"
-              title="Execução de ${esc(ex.nome)}"></iframe>
-    </div>`;
-  } else if(v?.tipo === 'externo'){
-    corpo.innerHTML = `<p style="margin-bottom:1rem;color:var(--smoke)">
-      Este vídeo abre fora do aplicativo.</p>
-      <a class="b b--primario b--bloco" href="${esc(v.url)}" target="_blank" rel="noopener">Abrir vídeo</a>`;
-  } else {
-    corpo.innerHTML = `<p style="color:var(--smoke)">Seu personal ainda não anexou um vídeo para este exercício.</p>`;
-  }
-  dlgVideo.showModal();
-}
-
-/* ---------- Histórico ---------- */
-
-function desenharHistorico(){
-  const el = document.getElementById('tela-historico');
-  const sessoes = sessoesDoAluno(ALUNO_ID);
-
-  if(sessoes.length === 0){
-    el.innerHTML = `<div class="vazio" style="margin-top:2rem">
-      <strong>Seu histórico começa no primeiro treino</strong>
-      Conclua um treino e ele aparece aqui, com as cargas que você usou.
-    </div>`;
-    return;
-  }
-
-  const grupos = new Map();
-  for(const s of sessoes){
-    if(!grupos.has(s.divisaoId)) grupos.set(s.divisaoId, []);
-    grupos.get(s.divisaoId).push(s);
-  }
-
+function desenharPerfil(){
+  const el = document.getElementById('tela-perfil');
   el.innerHTML = `
     <div class="tela-cabecalho">
-      <h1 class="tela-titulo">Histórico</h1>
-      <p class="tela-sub">${sessoes.length} treinos concluídos. Toque num treino para ver a evolução das cargas.</p>
+      <h1 class="tela-titulo">Perfil</h1>
     </div>
-    ${[...grupos.entries()].map(([divId, lista]) => {
-      const div = divisao(divId);
-      const nome = div ? div.nome : 'Treino removido';
-      return `
-        <div class="historico-grupo">
-          <button class="historico-grupo__cabeca" data-grupo="${esc(divId)}" aria-expanded="false">
-            <span class="historico-grupo__letra">${esc(letraDivisao(nome))}</span>
-            <span class="historico-grupo__info">
-              <span class="historico-grupo__titulo">${esc(nome)}</span>
-              <span class="historico-grupo__meta">
-                ${lista.length} ${lista.length === 1 ? 'vez' : 'vezes'}
-                · última em ${esc(formatarDataLonga(lista[0].em))}
-              </span>
-            </span>
-            <span class="aluno-linha__seta">${icone.baixo}</span>
-          </button>
-          <div class="historico-grupo__corpo" id="h-${esc(divId)}" hidden>
-            ${evolucaoDe(div, lista)}
-          </div>
-        </div>`;
-    }).join('')}`;
 
-  el.querySelectorAll('[data-grupo]').forEach(b => {
-    b.addEventListener('click', () => {
-      const corpo = document.getElementById('h-' + b.dataset.grupo);
-      const aberto = !corpo.hidden;
-      corpo.hidden = aberto;
-      b.setAttribute('aria-expanded', String(!aberto));
-    });
+    <div class="plano-cartao" style="margin-bottom:1.2rem">
+      <div>
+        <div class="campo__rotulo">Nome</div>
+        <div style="color:var(--bone);font-weight:600">${esc(perfil.nome)}</div>
+      </div>
+      <div>
+        <div class="campo__rotulo">Telefone</div>
+        <div style="color:var(--smoke)">${esc(perfil.telefone || '—')}</div>
+      </div>
+    </div>
+
+    <h2 class="secao-rotulo">Trocar senha</h2>
+    <p style="color:var(--smoke);font-size:.9rem;margin-bottom:1rem;line-height:1.6">
+      Sua senha foi criada pelo seu personal. Recomendamos trocá-la agora.
+    </p>
+    <p class="aviso" id="senha-erro" hidden></p>
+    <p class="aviso aviso--ok" id="senha-ok" hidden>Senha alterada.</p>
+    <label class="campo">
+      <span class="campo__rotulo">Nova senha</span>
+      <input type="password" id="nova-senha" placeholder="••••••••">
+    </label>
+    <label class="campo">
+      <span class="campo__rotulo">Repita a nova senha</span>
+      <input type="password" id="nova-senha-2" placeholder="••••••••">
+    </label>
+    <button class="b b--fantasma b--bloco" id="salvar-senha">Salvar nova senha</button>
+
+    <h2 class="secao-rotulo" style="margin-top:2rem">Conta</h2>
+    <button class="b b--sutil" id="sair-perfil">Sair</button>`;
+
+  document.getElementById('sair-perfil').addEventListener('click', async () => {
+    await sair();
+    window.location.replace('index.html');
+  });
+
+  document.getElementById('salvar-senha').addEventListener('click', async () => {
+    const elErro = document.getElementById('senha-erro');
+    const elOk = document.getElementById('senha-ok');
+    limparErro(elErro);
+    elOk.hidden = true;
+
+    const nova = document.getElementById('nova-senha').value;
+    const nova2 = document.getElementById('nova-senha-2').value;
+    if (nova !== nova2) {
+      mostrarErro(elErro, 'As senhas não coincidem.');
+      return;
+    }
+    const resultado = await trocarSenha(nova);
+    if (!resultado.ok) {
+      mostrarErro(elErro, resultado.erro);
+      return;
+    }
+    elOk.hidden = false;
+    document.getElementById('nova-senha').value = '';
+    document.getElementById('nova-senha-2').value = '';
   });
 }
 
-function evolucaoDe(div, sessoes){
-  if(!div) return '<p style="color:var(--smoke-2);font-size:.9rem">Este treino não está mais no seu plano.</p>';
-
-  const blocos = div.exercicios.map(ex => {
-    const pontos = sessoes
-      .map(s => ({em:s.em, ...(s.registros?.[ex.id] ?? {})}))
-      .filter(p => p.carga != null || p.reps != null);
-    if(pontos.length === 0) return '';
-
-    return `
-      <div style="margin-bottom:1.1rem">
-        <div style="font-weight:600;color:var(--bone);font-size:.92rem;margin-bottom:.35rem">${esc(ex.nome)}</div>
-        <div class="evolucao">
-          ${pontos.map((p, i) => {
-            const ant = pontos[i+1];
-            let delta = '<span class="evolucao__delta"></span>';
-            if(ant && p.carga != null && ant.carga != null){
-              const dif = +(p.carga - ant.carga).toFixed(1);
-              if(dif > 0)      delta = `<span class="evolucao__delta evolucao__delta--sobe">+${dif}</span>`;
-              else if(dif < 0) delta = `<span class="evolucao__delta evolucao__delta--desce">${dif}</span>`;
-              else             delta = `<span class="evolucao__delta evolucao__delta--desce">=</span>`;
-            }
-            return `
-              <div class="evolucao__linha">
-                <span class="evolucao__data">${esc(formatarData(p.em))}</span>
-                <span class="evolucao__ex">${p.carga != null ? esc(p.carga) + ' kg' : '—'}${p.reps != null ? ' × ' + esc(p.reps) : ''}</span>
-                ${delta}
-              </div>`;
-          }).join('')}
-        </div>
-      </div>`;
-  }).join('');
-
-  return blocos || '<p style="color:var(--smoke-2);font-size:.9rem">Treinos concluídos, sem cargas anotadas.</p>';
-}
-
-/* ---------- Perfil ---------- */
-
-document.getElementById('tela-perfil').innerHTML = `
-  <div class="tela-cabecalho">
-    <h1 class="tela-titulo">Perfil</h1>
-  </div>
-
-  <div class="plano-cartao" style="margin-bottom:1.2rem">
-    <div>
-      <div class="campo__rotulo">Nome</div>
-      <div style="color:var(--bone);font-weight:600">${esc(eu.nome)}</div>
-    </div>
-    <div>
-      <div class="campo__rotulo">Telefone</div>
-      <div style="color:var(--smoke)">${esc(eu.telefone)}</div>
-    </div>
-  </div>
-
-  <h2 class="secao-rotulo">Trocar senha</h2>
-  <p style="color:var(--smoke);font-size:.9rem;margin-bottom:1rem;line-height:1.6">
-    Sua senha foi criada pelo seu personal. Vale trocar por uma que só você saiba.
-  </p>
-  <label class="campo">
-    <span class="campo__rotulo">Nova senha</span>
-    <input type="password" placeholder="••••••••">
-  </label>
-  <label class="campo">
-    <span class="campo__rotulo">Repita a nova senha</span>
-    <input type="password" placeholder="••••••••">
-  </label>
-  <button class="b b--fantasma b--bloco">Salvar nova senha</button>
-
-  <h2 class="secao-rotulo">Demonstração</h2>
-  <button class="b b--sutil" id="reiniciar">Restaurar dados de exemplo</button>
-  <p class="campo__dica" style="margin-top:.5rem">
-    Apaga os treinos que você registrou nesta demonstração e volta ao estado inicial.
-  </p>`;
-
-document.getElementById('reiniciar').addEventListener('click', reiniciar);
-
 /* ---------- início ---------- */
-desenharHoje();
+
+const inicial = location.hash.slice(1);
+irPara(telas.some(t => t.id === inicial) ? inicial : 'hoje');
 </script>
 
 </body>
