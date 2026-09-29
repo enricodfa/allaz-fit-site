@@ -94,8 +94,24 @@ Quando comprarem o domínio, é só apontar nas configurações do serviço — 
 - SEO básico: title, description, Open Graph, favicon
 - Acessibilidade: navegação por teclado, foco visível
 
-## 5. Próxima fase
+## 5. Área do personal (Fase 2) — concluída, ainda não publicada
 
-A área do aluno (personal passando treino pro cliente acompanhar) fica pra uma
-segunda etapa — vai precisar de login, banco de dados e um painel novo, então
-entra como projeto à parte quando este site estiver aprovado e no ar.
+A área logada (personal monta o treino, aluno registra as cargas) está pronta
+neste branch, em `app/`, com login e banco reais (Supabase — projeto `ALLAZ`,
+RLS testado). Roteiro completo verificado ponta a ponta: personal cria aluno e
+plano com duas divisões e vídeo → aluno entra, vê o plano, abre o vídeo,
+registra cargas, conclui o treino → personal vê o histórico → aluno reabre o
+treino e encontra "da última vez". Isolamento entre contas confirmado nas
+quatro consultas de RLS.
+
+**Fora de escopo nesta versão** (o modelo de dados comporta tudo isso depois,
+sem migração destrutiva): biblioteca de exercícios reaproveitável entre planos,
+avaliação física e medidas, gráficos de evolução, chat aluno↔personal,
+recuperação de senha por e-mail, painel de dono da academia, upload de vídeo
+(só link do YouTube), notificações, modo offline completo, exportar treino em
+PDF.
+
+**Antes de publicar em produção**, ver `.superpowers/sdd/2026-09-16-area-personal/progress.md`
+para o que falta: decidir sobre as contas de teste `@teste.local` (listadas,
+não apagadas — decisão do dono), revisar a proteção contra senha vazada no
+painel do Supabase, e mesclar este branch (`area-personal`) para o `master`.
